@@ -168,6 +168,9 @@ final class RemoteSessionMonitor: ObservableObject {
             let thread = try await connection.startThread(defaultCwd: host.defaultCwd)
             hostActionErrors.removeValue(forKey: hostId)
             apply(event: .threadUpsert(hostId: hostId, thread: thread))
+            Task {
+                try? await connection.refreshThreads()
+            }
             guard let state = threads.first(where: { $0.hostId == hostId && $0.threadId == thread.id }) else {
                 throw RemoteSessionError.missingThread
             }
@@ -187,6 +190,9 @@ final class RemoteSessionMonitor: ObservableObject {
             let thread = try await connection.resumeThread(threadId: threadId)
             hostActionErrors.removeValue(forKey: hostId)
             apply(event: .threadUpsert(hostId: hostId, thread: thread))
+            Task {
+                try? await connection.refreshThreads()
+            }
             guard let state = threads.first(where: { $0.hostId == hostId && $0.threadId == thread.id }) else {
                 throw RemoteSessionError.missingThread
             }
@@ -732,9 +738,6 @@ actor RemoteAppServerConnection {
             try await initialize()
             await emit(.connectionState(hostId: host.id, state: .connected))
             startRefreshLoop()
-            Task {
-                try? await self.refreshThreads()
-            }
         } catch {
             await emit(.connectionState(hostId: host.id, state: .failed(error.localizedDescription)))
             await stop()
@@ -843,7 +846,7 @@ actor RemoteAppServerConnection {
         try await sendNotification(method: "initialized", params: nil)
     }
 
-    private func refreshThreads() async throws {
+    func refreshThreads() async throws {
         let result = try await request(method: "thread/list", params: ["limit": 100])
         let response = try remoteDecodeValue(result ?? AnyCodable([:]), as: RemoteAppServerThreadListResponse.self)
         await emit(.threadList(hostId: host.id, threads: response.data))
