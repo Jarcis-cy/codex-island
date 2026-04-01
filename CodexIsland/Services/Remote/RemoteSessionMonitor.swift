@@ -1025,7 +1025,6 @@ actor RemoteAppServerConnection: RemoteAppServerConnectionProtocol {
                 category: "remote.connection.lifecycle",
                 message: "Remote app-server initialized"
             )
-            startRefreshLoop()
         } catch {
             self.transport = nil
             await emit(.connectionState(hostId: host.id, state: .failed(error.localizedDescription)))
