@@ -158,7 +158,7 @@ private struct RemoteHostCard: View {
             }
 
             HStack(spacing: 8) {
-                Button(state.isConnected ? "Disconnect" : "Connect") {
+                Button(state.isConnected ? "Disconnect" : (state == .connecting ? "Connecting..." : "Connect")) {
                     state.isConnected ? onDisconnect() : onConnect()
                 }
                 .buttonStyle(.plain)
@@ -168,7 +168,7 @@ private struct RemoteHostCard: View {
                 .padding(.vertical, 6)
                 .background(Color.white.opacity(0.9))
                 .clipShape(Capsule())
-                .disabled(!draft.isValid)
+                .disabled(!draft.isValid || state == .connecting)
 
                 if state.isConnected {
                     Button(isStartingThread ? "Starting..." : "New Thread") {

@@ -128,6 +128,9 @@ final class RemoteSessionMonitor: ObservableObject {
 
     func connectHost(id: String) {
         guard let host = hosts.first(where: { $0.id == id }) else { return }
+        if case .connecting = hostStates[id] {
+            return
+        }
         hostActionErrors.removeValue(forKey: id)
         if !host.isEnabled {
             var updated = host
@@ -728,8 +731,10 @@ actor RemoteAppServerConnection {
         do {
             try await initialize()
             await emit(.connectionState(hostId: host.id, state: .connected))
-            try await refreshThreads()
             startRefreshLoop()
+            Task {
+                try? await self.refreshThreads()
+            }
         } catch {
             await emit(.connectionState(hostId: host.id, state: .failed(error.localizedDescription)))
             await stop()
