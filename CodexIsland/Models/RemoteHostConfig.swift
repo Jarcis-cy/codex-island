@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct RemoteHostConfig: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct RemoteHostConfig: Codable, Identifiable, Equatable, Sendable {
     var id: String
     var name: String
     var sshTarget: String
@@ -43,7 +43,7 @@ struct RemoteHostConfig: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-enum RemoteHostConnectionState: Equatable, Sendable {
+nonisolated enum RemoteHostConnectionState: Equatable, Sendable {
     case disconnected
     case connecting
     case connected

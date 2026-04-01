@@ -9,7 +9,7 @@ import Foundation
 import os.log
 
 /// Errors that can occur during process execution
-enum ProcessExecutorError: Error, LocalizedError {
+nonisolated enum ProcessExecutorError: Error, LocalizedError {
     case executionFailed(command: String, exitCode: Int32, stderr: String?)
     case invalidOutput(command: String)
     case commandNotFound(String)
@@ -31,7 +31,7 @@ enum ProcessExecutorError: Error, LocalizedError {
 }
 
 /// Result type for process execution
-struct ProcessResult: Sendable {
+nonisolated struct ProcessResult: Sendable {
     let output: String
     let exitCode: Int32
     let stderr: String?
@@ -40,7 +40,7 @@ struct ProcessResult: Sendable {
 }
 
 /// Protocol for executing shell commands (enables testing)
-protocol ProcessExecuting: Sendable {
+nonisolated protocol ProcessExecuting: Sendable {
     func run(_ executable: String, arguments: [String]) async throws -> String
     func runWithResult(_ executable: String, arguments: [String]) async -> Result<ProcessResult, ProcessExecutorError>
     func runSync(_ executable: String, arguments: [String]) -> Result<String, ProcessExecutorError>
@@ -48,8 +48,7 @@ protocol ProcessExecuting: Sendable {
 
 /// Default implementation using Foundation.Process
 actor ProcessExecutor: ProcessExecuting {
-    /// Shared instance (nonisolated(unsafe) required for actor init in static context)
-    nonisolated(unsafe) static let shared = ProcessExecutor()
+    static let shared = ProcessExecutor()
 
     /// Logger for process execution (nonisolated static for cross-context access)
     nonisolated static let logger = Logger(subsystem: "com.codexisland", category: "ProcessExecutor")

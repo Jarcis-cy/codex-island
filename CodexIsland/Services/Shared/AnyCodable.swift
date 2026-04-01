@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct AnyCodable: Codable, @unchecked Sendable {
+nonisolated struct AnyCodable: Codable, @unchecked Sendable {
     nonisolated(unsafe) let value: Any
 
     init(_ value: Any) {

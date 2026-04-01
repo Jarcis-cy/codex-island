@@ -7,7 +7,7 @@
 
 import Foundation
 
-protocol RemoteAppServerTransport: Sendable {
+nonisolated protocol RemoteAppServerTransport: Sendable {
     func start(
         onStdoutLine: @escaping @Sendable (String) async -> Void,
         onStderrLine: @escaping @Sendable (String) async -> Void,

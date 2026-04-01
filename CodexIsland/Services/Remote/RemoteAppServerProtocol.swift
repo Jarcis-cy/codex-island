@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct RemoteAppServerEnvelope: Codable, Sendable {
+nonisolated struct RemoteAppServerEnvelope: Codable, Sendable {
     let method: String?
     let id: RemoteRPCID?
     let params: AnyCodable?
@@ -15,12 +15,12 @@ struct RemoteAppServerEnvelope: Codable, Sendable {
     let error: RemoteAppServerErrorPayload?
 }
 
-struct RemoteAppServerErrorPayload: Codable, Error, Sendable {
+nonisolated struct RemoteAppServerErrorPayload: Codable, Error, Sendable {
     let code: Int
     let message: String
 }
 
-enum RemoteAppServerThreadStatus: Codable, Equatable, Sendable {
+nonisolated enum RemoteAppServerThreadStatus: Codable, Equatable, Sendable {
     case notLoaded
     case idle
     case systemError
@@ -65,39 +65,39 @@ enum RemoteAppServerThreadStatus: Codable, Equatable, Sendable {
     }
 }
 
-enum RemoteAppServerThreadActiveFlag: String, Codable, Equatable, Sendable {
+nonisolated enum RemoteAppServerThreadActiveFlag: String, Codable, Equatable, Sendable {
     case waitingOnApproval
     case waitingOnUserInput
 }
 
-struct RemoteAppServerThreadListResponse: Codable, Sendable {
+nonisolated struct RemoteAppServerThreadListResponse: Codable, Sendable {
     let data: [RemoteAppServerThread]
     let nextCursor: String?
 }
 
-struct RemoteAppServerThreadReadResponse: Codable, Sendable {
+nonisolated struct RemoteAppServerThreadReadResponse: Codable, Sendable {
     let thread: RemoteAppServerThread
 }
 
-struct RemoteAppServerThreadResumeResponse: Codable, Sendable {
+nonisolated struct RemoteAppServerThreadResumeResponse: Codable, Sendable {
     let thread: RemoteAppServerThread
 }
 
-struct RemoteAppServerThreadStartResponse: Codable, Sendable {
+nonisolated struct RemoteAppServerThreadStartResponse: Codable, Sendable {
     let thread: RemoteAppServerThread
     let model: String?
     let modelProvider: String?
 }
 
-struct RemoteAppServerTurnStartResponse: Codable, Sendable {
+nonisolated struct RemoteAppServerTurnStartResponse: Codable, Sendable {
     let turn: RemoteAppServerTurn
 }
 
-struct RemoteAppServerTurnSteerResponse: Codable, Sendable {
+nonisolated struct RemoteAppServerTurnSteerResponse: Codable, Sendable {
     let turnId: String
 }
 
-struct RemoteAppServerThread: Codable, Equatable, Sendable {
+nonisolated struct RemoteAppServerThread: Codable, Equatable, Sendable {
     let id: String
     let preview: String
     let ephemeral: Bool
@@ -112,45 +112,45 @@ struct RemoteAppServerThread: Codable, Equatable, Sendable {
     let turns: [RemoteAppServerTurn]
 }
 
-struct RemoteAppServerTurn: Codable, Equatable, Sendable {
+nonisolated struct RemoteAppServerTurn: Codable, Equatable, Sendable {
     let id: String
     let items: [RemoteAppServerThreadItem]
     let status: RemoteAppServerTurnStatus
     let error: RemoteAppServerTurnError?
 }
 
-enum RemoteAppServerTurnStatus: String, Codable, Equatable, Sendable {
+nonisolated enum RemoteAppServerTurnStatus: String, Codable, Equatable, Sendable {
     case completed
     case interrupted
     case failed
     case inProgress
 }
 
-struct RemoteAppServerTurnError: Codable, Equatable, Sendable {
+nonisolated struct RemoteAppServerTurnError: Codable, Equatable, Sendable {
     let message: String
     let additionalDetails: String?
 }
 
-struct RemoteAppServerErrorNotification: Codable, Sendable {
+nonisolated struct RemoteAppServerErrorNotification: Codable, Sendable {
     let error: RemoteAppServerTurnError
     let willRetry: Bool
     let threadId: String
     let turnId: String
 }
 
-struct RemoteAppServerCodexEventErrorNotification: Codable, Sendable {
+nonisolated struct RemoteAppServerCodexEventErrorNotification: Codable, Sendable {
     let id: String
     let msg: RemoteAppServerCodexEventErrorPayload
     let conversationId: String
 }
 
-struct RemoteAppServerCodexEventErrorPayload: Codable, Sendable {
+nonisolated struct RemoteAppServerCodexEventErrorPayload: Codable, Sendable {
     let type: String
     let message: String
     let additionalDetails: String?
 }
 
-enum RemoteAppServerUserInput: Codable, Equatable, Sendable {
+nonisolated enum RemoteAppServerUserInput: Codable, Equatable, Sendable {
     case text(String)
     case image(String)
     case localImage(String)
@@ -224,26 +224,26 @@ enum RemoteAppServerUserInput: Codable, Equatable, Sendable {
     }
 }
 
-enum RemoteAppServerCommandExecutionStatus: String, Codable, Equatable, Sendable {
+nonisolated enum RemoteAppServerCommandExecutionStatus: String, Codable, Equatable, Sendable {
     case inProgress
     case completed
     case failed
     case declined
 }
 
-enum RemoteAppServerPatchApplyStatus: String, Codable, Equatable, Sendable {
+nonisolated enum RemoteAppServerPatchApplyStatus: String, Codable, Equatable, Sendable {
     case inProgress
     case completed
     case failed
     case declined
 }
 
-struct RemoteAppServerFileUpdateChange: Codable, Equatable, Sendable {
+nonisolated struct RemoteAppServerFileUpdateChange: Codable, Equatable, Sendable {
     let path: String
     let diff: String
 }
 
-enum RemoteAppServerThreadItem: Equatable, Sendable {
+nonisolated enum RemoteAppServerThreadItem: Equatable, Sendable {
     case userMessage(id: String, content: [RemoteAppServerUserInput])
     case agentMessage(id: String, text: String)
     case reasoning(id: String, summary: [String], content: [String])
@@ -408,45 +408,45 @@ extension RemoteAppServerThreadItem: Codable {
     }
 }
 
-struct RemoteAppServerThreadStartedNotification: Codable, Sendable {
+nonisolated struct RemoteAppServerThreadStartedNotification: Codable, Sendable {
     let thread: RemoteAppServerThread
 }
 
-struct RemoteAppServerThreadStatusChangedNotification: Codable, Sendable {
+nonisolated struct RemoteAppServerThreadStatusChangedNotification: Codable, Sendable {
     let threadId: String
     let status: RemoteAppServerThreadStatus
 }
 
-struct RemoteAppServerTurnStartedNotification: Codable, Sendable {
+nonisolated struct RemoteAppServerTurnStartedNotification: Codable, Sendable {
     let threadId: String
     let turn: RemoteAppServerTurn
 }
 
-struct RemoteAppServerTurnCompletedNotification: Codable, Sendable {
+nonisolated struct RemoteAppServerTurnCompletedNotification: Codable, Sendable {
     let threadId: String
     let turn: RemoteAppServerTurn
 }
 
-struct RemoteAppServerItemStartedNotification: Codable, Sendable {
+nonisolated struct RemoteAppServerItemStartedNotification: Codable, Sendable {
     let item: RemoteAppServerThreadItem
     let threadId: String
     let turnId: String
 }
 
-struct RemoteAppServerItemCompletedNotification: Codable, Sendable {
+nonisolated struct RemoteAppServerItemCompletedNotification: Codable, Sendable {
     let item: RemoteAppServerThreadItem
     let threadId: String
     let turnId: String
 }
 
-struct RemoteAppServerAgentMessageDeltaNotification: Codable, Sendable {
+nonisolated struct RemoteAppServerAgentMessageDeltaNotification: Codable, Sendable {
     let threadId: String
     let turnId: String
     let itemId: String
     let delta: String
 }
 
-struct RemoteAppServerCommandApprovalRequest: Codable, Sendable {
+nonisolated struct RemoteAppServerCommandApprovalRequest: Codable, Sendable {
     let threadId: String
     let turnId: String
     let itemId: String
@@ -456,14 +456,14 @@ struct RemoteAppServerCommandApprovalRequest: Codable, Sendable {
     let cwd: String?
 }
 
-struct RemoteAppServerFileChangeApprovalRequest: Codable, Sendable {
+nonisolated struct RemoteAppServerFileChangeApprovalRequest: Codable, Sendable {
     let threadId: String
     let turnId: String
     let itemId: String
     let reason: String?
 }
 
-struct RemoteAppServerPermissionsApprovalRequest: Codable, Sendable {
+nonisolated struct RemoteAppServerPermissionsApprovalRequest: Codable, Sendable {
     let threadId: String
     let turnId: String
     let itemId: String
@@ -471,21 +471,21 @@ struct RemoteAppServerPermissionsApprovalRequest: Codable, Sendable {
     let permissions: RemoteAppServerPermissionProfile
 }
 
-struct RemoteAppServerPermissionProfile: Codable, Sendable {
+nonisolated struct RemoteAppServerPermissionProfile: Codable, Sendable {
     let network: RemoteAppServerNetworkPermission?
     let fileSystem: RemoteAppServerFileSystemPermission?
 }
 
-struct RemoteAppServerNetworkPermission: Codable, Sendable {
+nonisolated struct RemoteAppServerNetworkPermission: Codable, Sendable {
     let enabled: Bool?
 }
 
-struct RemoteAppServerFileSystemPermission: Codable, Sendable {
+nonisolated struct RemoteAppServerFileSystemPermission: Codable, Sendable {
     let read: [String]?
     let write: [String]?
 }
 
-func remoteDecodeValue<T: Decodable>(_ value: AnyCodable, as type: T.Type) throws -> T {
+nonisolated func remoteDecodeValue<T: Decodable>(_ value: AnyCodable, as type: T.Type) throws -> T {
     let data = try JSONEncoder().encode(value)
     return try JSONDecoder().decode(type, from: data)
 }

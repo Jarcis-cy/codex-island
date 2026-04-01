@@ -7,12 +7,12 @@
 
 import Foundation
 
-protocol RemoteDiagnosticsLogging: Sendable {
+nonisolated protocol RemoteDiagnosticsLogging: Sendable {
     func log(_ record: RemoteDiagnosticsRecord) async
 }
 
-struct RemoteDiagnosticsRecord: Codable, Sendable {
-    enum Level: String, Codable, Sendable {
+nonisolated struct RemoteDiagnosticsRecord: Codable, Sendable {
+    nonisolated enum Level: String, Codable, Sendable {
         case debug
         case info
         case warning
@@ -77,7 +77,7 @@ struct RemoteDiagnosticsRecord: Codable, Sendable {
 }
 
 actor RemoteDiagnosticsLogger: RemoteDiagnosticsLogging {
-    nonisolated(unsafe) static let shared = RemoteDiagnosticsLogger()
+    static let shared = RemoteDiagnosticsLogger()
 
     private let fileManager: FileManager
     private let encoder: JSONEncoder

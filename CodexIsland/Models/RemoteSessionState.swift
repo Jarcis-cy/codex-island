@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum RemoteRPCID: Hashable, Codable, Sendable {
+nonisolated enum RemoteRPCID: Hashable, Codable, Sendable {
     case int(Int)
     case string(String)
 
@@ -33,13 +33,13 @@ enum RemoteRPCID: Hashable, Codable, Sendable {
     }
 }
 
-enum RemoteApprovalKind: String, Sendable {
+nonisolated enum RemoteApprovalKind: String, Sendable {
     case commandExecution
     case fileChange
     case permissions
 }
 
-struct RemotePermissionProfile: Equatable, Sendable {
+nonisolated struct RemotePermissionProfile: Equatable, Sendable {
     var networkEnabled: Bool?
     var readRoots: [String]
     var writeRoots: [String]
@@ -69,7 +69,7 @@ struct RemotePermissionProfile: Equatable, Sendable {
     }
 }
 
-struct RemotePendingApproval: Identifiable, Equatable, Sendable {
+nonisolated struct RemotePendingApproval: Identifiable, Equatable, Sendable {
     let id: String
     let requestId: RemoteRPCID
     let kind: RemoteApprovalKind
@@ -90,7 +90,7 @@ struct RemotePendingApproval: Identifiable, Equatable, Sendable {
     }
 }
 
-struct RemoteThreadState: Identifiable, Equatable, Sendable {
+nonisolated struct RemoteThreadState: Identifiable, Equatable, Sendable {
     let hostId: String
     let hostName: String
     let threadId: String

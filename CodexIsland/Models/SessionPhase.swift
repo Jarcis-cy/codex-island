@@ -9,7 +9,7 @@
 import Foundation
 
 /// Permission context for tools waiting for approval
-struct PermissionContext: Sendable {
+nonisolated struct PermissionContext: Sendable {
     let toolUseId: String
     let toolName: String
     let toolInput: [String: AnyCodable]?
@@ -49,7 +49,7 @@ extension PermissionContext: Equatable {
 }
 
 /// Explicit session phases - the state machine
-enum SessionPhase: Sendable {
+nonisolated enum SessionPhase: Sendable {
     /// Session is idle, waiting for user input or new activity
     case idle
 
@@ -137,7 +137,7 @@ enum SessionPhase: Sendable {
     }
 
     /// Whether this phase indicates the session needs user attention
-    var needsAttention: Bool {
+    nonisolated var needsAttention: Bool {
         switch self {
         case .waitingForApproval, .waitingForInput:
             return true
@@ -147,7 +147,7 @@ enum SessionPhase: Sendable {
     }
 
     /// Whether this phase indicates active processing
-    var isActive: Bool {
+    nonisolated var isActive: Bool {
         switch self {
         case .processing, .compacting:
             return true
@@ -157,7 +157,7 @@ enum SessionPhase: Sendable {
     }
 
     /// Whether this is a waitingForApproval phase
-    var isWaitingForApproval: Bool {
+    nonisolated var isWaitingForApproval: Bool {
         if case .waitingForApproval = self {
             return true
         }
@@ -165,7 +165,7 @@ enum SessionPhase: Sendable {
     }
 
     /// Extract tool name if waiting for approval
-    var approvalToolName: String? {
+    nonisolated var approvalToolName: String? {
         if case .waitingForApproval(let ctx) = self {
             return ctx.toolName
         }
@@ -192,7 +192,7 @@ extension SessionPhase: Equatable {
 
 // MARK: - Debug Description
 
-extension SessionPhase: CustomStringConvertible {
+nonisolated extension SessionPhase: CustomStringConvertible {
     nonisolated var description: String {
         switch self {
         case .idle:

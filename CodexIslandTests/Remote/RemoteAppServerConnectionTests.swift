@@ -200,7 +200,7 @@ final class RemoteAppServerConnectionTests: XCTestCase {
         return try XCTUnwrap(object["id"] as? Int)
     }
 
-    private static func method(in line: String) throws -> String? {
+    nonisolated private static func method(in line: String) throws -> String? {
         let data = Data(line.utf8)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         return object["method"] as? String

@@ -41,7 +41,7 @@ enum RemoteSessionError: LocalizedError {
     }
 }
 
-protocol RemoteAppServerConnectionProtocol: Sendable {
+nonisolated protocol RemoteAppServerConnectionProtocol: Sendable {
     func updateHost(_ host: RemoteHostConfig) async
     func start() async
     func stop() async
@@ -53,7 +53,7 @@ protocol RemoteAppServerConnectionProtocol: Sendable {
     func refreshThreads() async throws
 }
 
-struct RemoteAppServerConnectionDependencies: Sendable {
+nonisolated struct RemoteAppServerConnectionDependencies: Sendable {
     let transportFactory: @Sendable (RemoteHostConfig) -> any RemoteAppServerTransport
     let processExecutor: any ProcessExecuting
     let diagnosticsLogger: any RemoteDiagnosticsLogging
@@ -117,8 +117,8 @@ final class RemoteSessionMonitor: ObservableObject {
     @Published private(set) var hostActionErrors: [String: String] = [:]
     @Published private(set) var hostActionInProgress: Set<String> = []
 
-    private let saveHosts: @Sendable ([RemoteHostConfig]) -> Void
-    private let connectionFactory: @Sendable (
+    private let saveHosts: ([RemoteHostConfig]) -> Void
+    private let connectionFactory: (
         RemoteHostConfig,
         @escaping @Sendable (RemoteConnectionEvent) async -> Void
     ) -> any RemoteAppServerConnectionProtocol
@@ -129,18 +129,18 @@ final class RemoteSessionMonitor: ObservableObject {
 
     init(
         initialHosts: [RemoteHostConfig]? = nil,
-        loadHosts: @escaping @Sendable () -> [RemoteHostConfig] = { AppSettings.remoteHosts },
-        saveHosts: @escaping @Sendable ([RemoteHostConfig]) -> Void = { AppSettings.remoteHosts = $0 },
+        loadHosts: (() -> [RemoteHostConfig])? = nil,
+        saveHosts: (([RemoteHostConfig]) -> Void)? = nil,
         diagnosticsLogger: any RemoteDiagnosticsLogging = RemoteDiagnosticsLogger.shared,
-        connectionFactory: @escaping @Sendable (
+        connectionFactory: @escaping (
             RemoteHostConfig,
             @escaping @Sendable (RemoteConnectionEvent) async -> Void
         ) -> any RemoteAppServerConnectionProtocol = { host, emit in
             RemoteAppServerConnection(host: host, emit: emit)
         }
     ) {
-        self.hosts = initialHosts ?? loadHosts()
-        self.saveHosts = saveHosts
+        self.hosts = initialHosts ?? loadHosts?() ?? AppSettings.remoteHosts
+        self.saveHosts = saveHosts ?? { AppSettings.remoteHosts = $0 }
         self.diagnosticsLogger = diagnosticsLogger
         self.connectionFactory = connectionFactory
     }
@@ -472,9 +472,10 @@ final class RemoteSessionMonitor: ObservableObject {
             if let connection = connections[id] {
                 Task { await connection.updateHost(host) }
             } else {
-                let connection = connectionFactory(host) { [weak self] event in
+                let weakSelf = self
+                let connection = connectionFactory(host) { event in
                     await MainActor.run {
-                        self?.apply(event: event)
+                        weakSelf.apply(event: event)
                     }
                 }
                 connections[id] = connection

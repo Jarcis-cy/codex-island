@@ -8,7 +8,7 @@
 import Foundation
 
 /// Information about a process in the tree
-struct ProcessInfo: Sendable {
+nonisolated struct ProcessInfo: Sendable {
     let pid: Int
     let ppid: Int
     let command: String
@@ -23,7 +23,7 @@ struct ProcessInfo: Sendable {
 }
 
 /// Builds and queries the system process tree
-struct ProcessTreeBuilder: Sendable {
+nonisolated struct ProcessTreeBuilder: Sendable {
     nonisolated static let shared = ProcessTreeBuilder()
 
     private nonisolated init() {}
