@@ -38,6 +38,7 @@ enum AppSettings {
 
     private enum Keys {
         static let notificationSound = "notificationSound"
+        static let remoteHosts = "remoteHosts"
     }
 
     // MARK: - Notification Sound
@@ -53,6 +54,30 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Keys.notificationSound)
+        }
+    }
+
+    // MARK: - Remote Hosts
+
+    static var remoteHosts: [RemoteHostConfig] {
+        get {
+            guard let data = defaults.data(forKey: Keys.remoteHosts) else {
+                return []
+            }
+
+            do {
+                return try JSONDecoder().decode([RemoteHostConfig].self, from: data)
+            } catch {
+                return []
+            }
+        }
+        set {
+            do {
+                let data = try JSONEncoder().encode(newValue)
+                defaults.set(data, forKey: Keys.remoteHosts)
+            } catch {
+                defaults.removeObject(forKey: Keys.remoteHosts)
+            }
         }
     }
 }

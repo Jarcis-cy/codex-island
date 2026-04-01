@@ -10,10 +10,11 @@ import SwiftUI
 
 struct CodexInstancesView: View {
     @ObservedObject var sessionMonitor: CodexSessionMonitor
+    @ObservedObject var remoteSessionMonitor: RemoteSessionMonitor
     @ObservedObject var viewModel: NotchViewModel
 
     var body: some View {
-        if sessionMonitor.instances.isEmpty {
+        if sessionMonitor.instances.isEmpty && remoteSessionMonitor.threads.isEmpty {
             emptyState
         } else {
             instancesList
@@ -28,7 +29,7 @@ struct CodexInstancesView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.white.opacity(0.4))
 
-            Text("Run codex in terminal")
+            Text("Run codex in terminal or add a remote host")
                 .font(.system(size: 11))
                 .foregroundColor(.white.opacity(0.25))
         }
@@ -55,6 +56,20 @@ struct CodexInstancesView: View {
         }
     }
 
+    private var sortedRemoteThreads: [RemoteThreadState] {
+        remoteSessionMonitor.threads.sorted { a, b in
+            let priorityA = phasePriority(a.phase)
+            let priorityB = phasePriority(b.phase)
+            if priorityA != priorityB {
+                return priorityA < priorityB
+            }
+
+            let dateA = a.lastUserMessageDate ?? a.lastActivity
+            let dateB = b.lastUserMessageDate ?? b.lastActivity
+            return dateA > dateB
+        }
+    }
+
     /// Lower number = higher priority
     /// Approval requests share priority with processing to maintain stable ordering
     private func phasePriority(_ phase: SessionPhase) -> Int {
@@ -68,6 +83,25 @@ struct CodexInstancesView: View {
     private var instancesList: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 2) {
+                if !sortedRemoteThreads.isEmpty {
+                    sectionLabel("Remote")
+                    ForEach(sortedRemoteThreads) { thread in
+                        RemoteInstanceRow(
+                            thread: thread,
+                            onChat: { openRemoteChat(thread) },
+                            onApprove: { approveRemoteThread(thread) },
+                            onReject: { rejectRemoteThread(thread) }
+                        )
+                        .id(thread.stableId)
+                    }
+                }
+
+                if !sortedRemoteThreads.isEmpty && !sortedInstances.isEmpty {
+                    Divider()
+                        .background(Color.white.opacity(0.08))
+                        .padding(.vertical, 4)
+                }
+
                 ForEach(sortedInstances) { session in
                     InstanceRow(
                         session: session,
@@ -99,6 +133,10 @@ struct CodexInstancesView: View {
         viewModel.showChat(for: session)
     }
 
+    private func openRemoteChat(_ thread: RemoteThreadState) {
+        viewModel.showRemoteChat(for: thread)
+    }
+
     private func approveSession(_ session: SessionState) {
         sessionMonitor.approvePermission(sessionId: session.sessionId)
     }
@@ -109,6 +147,31 @@ struct CodexInstancesView: View {
 
     private func archiveSession(_ session: SessionState) {
         sessionMonitor.archiveSession(sessionId: session.sessionId)
+    }
+
+    private func approveRemoteThread(_ thread: RemoteThreadState) {
+        Task {
+            try? await remoteSessionMonitor.approve(thread: thread)
+        }
+    }
+
+    private func rejectRemoteThread(_ thread: RemoteThreadState) {
+        Task {
+            try? await remoteSessionMonitor.deny(thread: thread)
+        }
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        HStack {
+            Text(text)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(0.3))
+                .textCase(.uppercase)
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
     }
 }
 
@@ -321,6 +384,158 @@ struct InstanceRow: View {
         }
     }
 
+}
+
+// MARK: - Remote Instance Row
+
+struct RemoteInstanceRow: View {
+    let thread: RemoteThreadState
+    let onChat: () -> Void
+    let onApprove: () -> Void
+    let onReject: () -> Void
+
+    @State private var isHovered = false
+    @State private var spinnerPhase = 0
+
+    private let spinnerSymbols = ["·", "✢", "✳", "∗", "✻", "✽"]
+    private let spinnerTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
+
+    private var isWaitingForApproval: Bool {
+        thread.phase.isWaitingForApproval
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            stateIndicator
+                .frame(width: 14)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(thread.displayTitle)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                Text(thread.sourceLabel)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.3))
+                    .lineLimit(1)
+
+                if isWaitingForApproval, let toolName = thread.approvalToolName {
+                    HStack(spacing: 4) {
+                        Text(toolName)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(TerminalColors.amber.opacity(0.9))
+                        if let detail = thread.pendingToolInput {
+                            Text(detail)
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.5))
+                                .lineLimit(1)
+                        }
+                    }
+                } else if let role = thread.lastMessageRole {
+                    switch role {
+                    case "tool":
+                        HStack(spacing: 4) {
+                            if let toolName = thread.lastToolName {
+                                Text(toolName)
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.5))
+                            }
+                            if let input = thread.lastMessage {
+                                Text(input)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white.opacity(0.4))
+                                    .lineLimit(1)
+                            }
+                        }
+                    case "user":
+                        HStack(spacing: 4) {
+                            Text("You:")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.white.opacity(0.5))
+                            if let message = thread.lastMessage {
+                                Text(message)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white.opacity(0.4))
+                                    .lineLimit(1)
+                            }
+                        }
+                    default:
+                        if let message = thread.lastMessage {
+                            Text(message)
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.4))
+                                .lineLimit(1)
+                        }
+                    }
+                } else if let preview = thread.lastMessage ?? (!thread.preview.isEmpty ? thread.preview : nil) {
+                    Text(preview)
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.4))
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if isWaitingForApproval {
+                InlineApprovalButtons(
+                    onChat: onChat,
+                    onApprove: onApprove,
+                    onReject: onReject
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            } else {
+                HStack(spacing: 8) {
+                    IconButton(icon: "bubble.left") {
+                        onChat()
+                    }
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 14)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onChat()
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isWaitingForApproval)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
+        )
+        .onHover { isHovered = $0 }
+    }
+
+    @ViewBuilder
+    private var stateIndicator: some View {
+        switch thread.phase {
+        case .processing, .compacting:
+            Text(spinnerSymbols[spinnerPhase % spinnerSymbols.count])
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(TerminalColors.prompt)
+                .onReceive(spinnerTimer) { _ in
+                    spinnerPhase = (spinnerPhase + 1) % spinnerSymbols.count
+                }
+        case .waitingForApproval:
+            Text(spinnerSymbols[spinnerPhase % spinnerSymbols.count])
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(TerminalColors.amber)
+                .onReceive(spinnerTimer) { _ in
+                    spinnerPhase = (spinnerPhase + 1) % spinnerSymbols.count
+                }
+        case .waitingForInput:
+            Circle()
+                .fill(TerminalColors.green)
+                .frame(width: 6, height: 6)
+        case .idle, .ended:
+            Circle()
+                .fill(thread.connectionState.isConnected ? Color.white.opacity(0.2) : Color.red.opacity(0.7))
+                .frame(width: 6, height: 6)
+        }
+    }
 }
 
 // MARK: - Inline Approval Buttons

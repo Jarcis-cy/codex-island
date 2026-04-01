@@ -82,6 +82,17 @@ struct NotchMenuView: View {
                 .background(Color.white.opacity(0.08))
                 .padding(.vertical, 4)
 
+            MenuRow(
+                icon: "server.rack",
+                label: "Remote Hosts"
+            ) {
+                viewModel.showRemoteHosts()
+            }
+
+            Divider()
+                .background(Color.white.opacity(0.08))
+                .padding(.vertical, 4)
+
             // About
             UpdateRow(updateManager: updateManager)
 

@@ -27,12 +27,16 @@ enum NotchContentType: Equatable {
     case instances
     case menu
     case chat(SessionState)
+    case remoteHosts
+    case remoteChat(RemoteThreadState)
 
     var id: String {
         switch self {
         case .instances: return "instances"
         case .menu: return "menu"
         case .chat(let session): return "chat-\(session.sessionId)"
+        case .remoteHosts: return "remote-hosts"
+        case .remoteChat(let thread): return "remote-chat-\(thread.stableId)"
         }
     }
 }
@@ -70,11 +74,21 @@ class NotchViewModel: ObservableObject {
                 width: min(screenRect.width * 0.5, 600),
                 height: 580
             )
+        case .remoteChat:
+            return CGSize(
+                width: min(screenRect.width * 0.56, 680),
+                height: 580
+            )
         case .menu:
             // Compact size for settings menu
             return CGSize(
                 width: min(screenRect.width * 0.4, 480),
                 height: 420 + screenSelector.expandedPickerHeight + soundSelector.expandedPickerHeight
+            )
+        case .remoteHosts:
+            return CGSize(
+                width: min(screenRect.width * 0.48, 560),
+                height: 500
             )
         case .instances:
             return CGSize(
@@ -140,11 +154,13 @@ class NotchViewModel: ObservableObject {
     /// Whether we're in chat mode (sticky behavior)
     private var isInChatMode: Bool {
         if case .chat = contentType { return true }
+        if case .remoteChat = contentType { return true }
         return false
     }
 
     /// The chat session we're viewing (persists across close/open)
     private var currentChatSession: SessionState?
+    private var currentRemoteChatThread: RemoteThreadState?
 
     private func handleMouseMove(_ location: CGPoint) {
         let inNotch = geometry.isPointInNotch(location)
@@ -211,6 +227,14 @@ class NotchViewModel: ObservableObject {
                 return
             }
             contentType = .chat(chatSession)
+            return
+        }
+
+        if let remoteThread = currentRemoteChatThread {
+            if case .remoteChat(let current) = contentType, current.stableId == remoteThread.stableId {
+                return
+            }
+            contentType = .remoteChat(remoteThread)
         }
     }
 
@@ -218,6 +242,8 @@ class NotchViewModel: ObservableObject {
         // Save chat session before closing if in chat mode
         if case .chat(let session) = contentType {
             currentChatSession = session
+        } else if case .remoteChat(let thread) = contentType {
+            currentRemoteChatThread = thread
         }
         status = .closed
         contentType = .instances
@@ -242,12 +268,28 @@ class NotchViewModel: ObservableObject {
         if case .chat(let current) = contentType, current.sessionId == session.sessionId {
             return
         }
+        currentRemoteChatThread = nil
         contentType = .chat(session)
+    }
+
+    func showRemoteHosts() {
+        currentChatSession = nil
+        currentRemoteChatThread = nil
+        contentType = .remoteHosts
+    }
+
+    func showRemoteChat(for thread: RemoteThreadState) {
+        if case .remoteChat(let current) = contentType, current.stableId == thread.stableId {
+            return
+        }
+        currentChatSession = nil
+        contentType = .remoteChat(thread)
     }
 
     /// Go back to instances list and clear saved chat state
     func exitChat() {
         currentChatSession = nil
+        currentRemoteChatThread = nil
         contentType = .instances
     }
 

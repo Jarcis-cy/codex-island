@@ -18,6 +18,7 @@ private let cornerRadiusInsets = (
 struct NotchView: View {
     @ObservedObject var viewModel: NotchViewModel
     @StateObject private var sessionMonitor = CodexSessionMonitor()
+    @StateObject private var remoteSessionMonitor = RemoteSessionMonitor.shared
     @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
     @ObservedObject private var updateManager = UpdateManager.shared
     @State private var previousPendingIds: Set<String> = []
@@ -31,12 +32,12 @@ struct NotchView: View {
 
     /// Whether any session is currently processing or compacting
     private var isAnyProcessing: Bool {
-        sessionMonitor.instances.contains { $0.phase == .processing || $0.phase == .compacting }
+        allPhases.contains { $0 == .processing || $0 == .compacting }
     }
 
     /// Whether any session has a pending permission request
     private var hasPendingPermission: Bool {
-        sessionMonitor.instances.contains { $0.phase.isWaitingForApproval }
+        allPhases.contains { $0.isWaitingForApproval }
     }
 
     /// Whether any session is waiting for user input (done/ready state) within the display window
@@ -44,14 +45,27 @@ struct NotchView: View {
         let now = Date()
         let displayDuration: TimeInterval = 30  // Show checkmark for 30 seconds
 
-        return sessionMonitor.instances.contains { session in
-            guard session.phase == .waitingForInput else { return false }
-            // Only show if within the 30-second display window
-            if let enteredAt = waitingForInputTimestamps[session.stableId] {
+        return allWaitingForInputIds.contains { stableId in
+            if let enteredAt = waitingForInputTimestamps[stableId] {
                 return now.timeIntervalSince(enteredAt) < displayDuration
             }
             return false
         }
+    }
+
+    private var allPhases: [SessionPhase] {
+        sessionMonitor.instances.map(\.phase) + remoteSessionMonitor.threads.map(\.phase)
+    }
+
+    private var allWaitingForInputIds: Set<String> {
+        Set(
+            sessionMonitor.instances
+                .filter { $0.phase == .waitingForInput }
+                .map(\.stableId) +
+            remoteSessionMonitor.threads
+                .filter { $0.phase == .waitingForInput }
+                .map(\.stableId)
+        )
     }
 
     // MARK: - Sizing
@@ -190,6 +204,7 @@ struct NotchView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             sessionMonitor.startMonitoring()
+            remoteSessionMonitor.startMonitoring()
             // On non-notched devices, keep visible so users have a target to interact with
             if !viewModel.hasPhysicalNotch {
                 isVisible = true
@@ -204,6 +219,11 @@ struct NotchView: View {
         .onChange(of: sessionMonitor.instances) { _, instances in
             handleProcessingChange()
             handleWaitingForInputChange(instances)
+        }
+        .onChange(of: remoteSessionMonitor.threads) { _, threads in
+            handleProcessingChange()
+            handleRemotePendingChange(threads)
+            handleRemoteWaitingForInputChange(threads)
         }
     }
 
@@ -352,15 +372,24 @@ struct NotchView: View {
             case .instances:
                 CodexInstancesView(
                     sessionMonitor: sessionMonitor,
+                    remoteSessionMonitor: remoteSessionMonitor,
                     viewModel: viewModel
                 )
             case .menu:
                 NotchMenuView(viewModel: viewModel)
+            case .remoteHosts:
+                RemoteHostsView(viewModel: viewModel)
             case .chat(let session):
                 ChatView(
                     sessionId: session.sessionId,
                     initialSession: session,
                     sessionMonitor: sessionMonitor,
+                    viewModel: viewModel
+                )
+            case .remoteChat(let thread):
+                RemoteChatView(
+                    initialThread: thread,
+                    remoteSessionMonitor: remoteSessionMonitor,
                     viewModel: viewModel
                 )
             }
@@ -417,6 +446,7 @@ struct NotchView: View {
 
     private func handlePendingSessionsChange(_ sessions: [SessionState]) {
         let currentIds = Set(sessions.map { $0.stableId })
+        let combinedIds = currentIds.union(remoteSessionMonitor.threads.filter(\.needsAttention).map(\.stableId))
         let newPendingIds = currentIds.subtracting(previousPendingIds)
 
         if !newPendingIds.isEmpty &&
@@ -425,7 +455,21 @@ struct NotchView: View {
             viewModel.notchOpen(reason: .notification)
         }
 
-        previousPendingIds = currentIds
+        previousPendingIds = combinedIds
+    }
+
+    private func handleRemotePendingChange(_ threads: [RemoteThreadState]) {
+        let currentIds = Set(threads.filter(\.needsAttention).map(\.stableId))
+        let combinedIds = currentIds.union(sessionMonitor.pendingInstances.map(\.stableId))
+        let newPendingIds = currentIds.subtracting(previousPendingIds)
+
+        if !newPendingIds.isEmpty &&
+           viewModel.status == .closed &&
+           !TerminalVisibilityDetector.isTerminalVisibleOnCurrentSpace() {
+            viewModel.notchOpen(reason: .notification)
+        }
+
+        previousPendingIds = combinedIds
     }
 
     private func handleWaitingForInputChange(_ instances: [SessionState]) {
@@ -484,7 +528,46 @@ struct NotchView: View {
             }
         }
 
-        previousWaitingForInputIds = currentIds
+        previousWaitingForInputIds = currentIds.union(
+            remoteSessionMonitor.threads
+                .filter { $0.phase == .waitingForInput }
+                .map(\.stableId)
+        )
+    }
+
+    private func handleRemoteWaitingForInputChange(_ threads: [RemoteThreadState]) {
+        let waitingForInputThreads = threads.filter { $0.phase == .waitingForInput }
+        let currentIds = Set(waitingForInputThreads.map(\.stableId))
+        let newWaitingIds = currentIds.subtracting(previousWaitingForInputIds)
+
+        let now = Date()
+        for thread in waitingForInputThreads where newWaitingIds.contains(thread.stableId) {
+            waitingForInputTimestamps[thread.stableId] = now
+        }
+
+        let staleIds = Set(waitingForInputTimestamps.keys).subtracting(allWaitingForInputIds)
+        for staleId in staleIds {
+            waitingForInputTimestamps.removeValue(forKey: staleId)
+        }
+
+        if !newWaitingIds.isEmpty {
+            if viewModel.status == .closed {
+                viewModel.notchOpen(reason: .notification)
+            }
+
+            DispatchQueue.main.async {
+                isBouncing = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    isBouncing = false
+                }
+            }
+        }
+
+        previousWaitingForInputIds = currentIds.union(
+            sessionMonitor.instances
+                .filter { $0.phase == .waitingForInput }
+                .map(\.stableId)
+        )
     }
 
     /// Determine if notification sound should play for the given sessions
