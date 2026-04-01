@@ -46,6 +46,7 @@ final class RemoteSessionMonitor: ObservableObject {
     @Published private(set) var hosts: [RemoteHostConfig]
     @Published private(set) var threads: [RemoteThreadState] = []
     @Published private(set) var hostStates: [String: RemoteHostConnectionState] = [:]
+    @Published private(set) var hostActionErrors: [String: String] = [:]
 
     private var connections: [String: RemoteAppServerConnection] = [:]
 
@@ -87,6 +88,7 @@ final class RemoteSessionMonitor: ObservableObject {
 
     func connectHost(id: String) {
         guard let host = hosts.first(where: { $0.id == id }) else { return }
+        hostActionErrors.removeValue(forKey: id)
         if !host.isEnabled {
             var updated = host
             updated.isEnabled = true
@@ -98,6 +100,7 @@ final class RemoteSessionMonitor: ObservableObject {
 
     func disconnectHost(id: String) {
         hostStates[id] = .disconnected
+        hostActionErrors.removeValue(forKey: id)
         if let connection = connections.removeValue(forKey: id) {
             Task { await connection.stop() }
         }
@@ -111,12 +114,18 @@ final class RemoteSessionMonitor: ObservableObject {
             throw RemoteSessionError.notConnected
         }
 
-        let thread = try await connection.startThread(defaultCwd: host.defaultCwd)
-        apply(event: .threadUpsert(hostId: hostId, thread: thread))
-        guard let state = threads.first(where: { $0.hostId == hostId && $0.threadId == thread.id }) else {
-            throw RemoteSessionError.missingThread
+        do {
+            let thread = try await connection.startThread(defaultCwd: host.defaultCwd)
+            hostActionErrors.removeValue(forKey: hostId)
+            apply(event: .threadUpsert(hostId: hostId, thread: thread))
+            guard let state = threads.first(where: { $0.hostId == hostId && $0.threadId == thread.id }) else {
+                throw RemoteSessionError.missingThread
+            }
+            return state
+        } catch {
+            hostActionErrors[hostId] = error.localizedDescription
+            throw error
         }
-        return state
     }
 
     func openThread(hostId: String, threadId: String) async throws -> RemoteThreadState {
@@ -124,12 +133,18 @@ final class RemoteSessionMonitor: ObservableObject {
             throw RemoteSessionError.notConnected
         }
 
-        let thread = try await connection.resumeThread(threadId: threadId)
-        apply(event: .threadUpsert(hostId: hostId, thread: thread))
-        guard let state = threads.first(where: { $0.hostId == hostId && $0.threadId == thread.id }) else {
-            throw RemoteSessionError.missingThread
+        do {
+            let thread = try await connection.resumeThread(threadId: threadId)
+            hostActionErrors.removeValue(forKey: hostId)
+            apply(event: .threadUpsert(hostId: hostId, thread: thread))
+            guard let state = threads.first(where: { $0.hostId == hostId && $0.threadId == thread.id }) else {
+                throw RemoteSessionError.missingThread
+            }
+            return state
+        } catch {
+            hostActionErrors[hostId] = error.localizedDescription
+            throw error
         }
-        return state
     }
 
     func sendMessage(thread: RemoteThreadState, text: String) async throws {
@@ -591,6 +606,7 @@ actor RemoteAppServerConnection {
     private var stdoutTask: Task<Void, Never>?
     private var stderrTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
+    private var remoteHomeDirectory: String?
     private var nextRequestId: Int = 1
     private var pendingRequests: [Int: CheckedContinuation<AnyCodable?, Error>] = [:]
     private var latestStderr: String = ""
@@ -606,6 +622,9 @@ actor RemoteAppServerConnection {
     func updateHost(_ host: RemoteHostConfig) async {
         let shouldRestart = self.host != host
         self.host = host
+        if shouldRestart {
+            remoteHomeDirectory = nil
+        }
         if shouldRestart {
             await stop()
             await start()
@@ -692,9 +711,10 @@ actor RemoteAppServerConnection {
     }
 
     func startThread(defaultCwd: String) async throws -> RemoteAppServerThread {
-        let params: [String: Any] = defaultCwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let normalizedCwd = try await normalizeRemoteCwd(defaultCwd)
+        let params: [String: Any] = normalizedCwd?.isEmpty != false
             ? [:]
-            : ["cwd": defaultCwd]
+            : ["cwd": normalizedCwd!]
 
         let result = try await request(method: "thread/start", params: params)
         let response = try remoteDecodeValue(result ?? AnyCodable([:]), as: RemoteAppServerThreadStartResponse.self)
@@ -1014,5 +1034,41 @@ actor RemoteAppServerConnection {
             payload["fileSystem"] = fileSystem
         }
         return payload
+    }
+
+    private func normalizeRemoteCwd(_ cwd: String) async throws -> String? {
+        let trimmed = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if trimmed == "~" {
+            return try await resolveRemoteHomeDirectory() ?? nil
+        }
+
+        if trimmed.hasPrefix("~/") {
+            guard let home = try await resolveRemoteHomeDirectory(), !home.isEmpty else {
+                throw RemoteSessionError.invalidConfiguration("Could not resolve remote home directory for `~`")
+            }
+            let suffix = String(trimmed.dropFirst(2))
+            return URL(fileURLWithPath: home).appendingPathComponent(suffix).path
+        }
+
+        return trimmed
+    }
+
+    private func resolveRemoteHomeDirectory() async throws -> String? {
+        if let remoteHomeDirectory, !remoteHomeDirectory.isEmpty {
+            return remoteHomeDirectory
+        }
+
+        let output = try await ProcessExecutor.shared.run("/usr/bin/ssh", arguments: [
+            "-T",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=5",
+            host.sshTarget,
+            "printf '%s' \"$HOME\""
+        ])
+        let home = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        remoteHomeDirectory = home.isEmpty ? nil : home
+        return remoteHomeDirectory
     }
 }

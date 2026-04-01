@@ -29,16 +29,20 @@ struct RemoteHostsView: View {
                             RemoteHostCard(
                                 host: host,
                                 state: remoteSessionMonitor.hostStates[host.id] ?? .disconnected,
+                                actionError: remoteSessionMonitor.hostActionErrors[host.id],
                                 onChange: { remoteSessionMonitor.updateHost($0) },
                                 onRemove: { remoteSessionMonitor.removeHost(id: host.id) },
                                 onConnect: { remoteSessionMonitor.connectHost(id: host.id) },
                                 onDisconnect: { remoteSessionMonitor.disconnectHost(id: host.id) },
                                 onStartThread: {
                                     Task {
-                                        if let thread = try? await remoteSessionMonitor.startThread(hostId: host.id) {
+                                        do {
+                                            let thread = try await remoteSessionMonitor.startThread(hostId: host.id)
                                             await MainActor.run {
                                                 viewModel.showRemoteChat(for: thread)
                                             }
+                                        } catch {
+                                            return
                                         }
                                     }
                                 }
@@ -92,6 +96,7 @@ struct RemoteHostsView: View {
 private struct RemoteHostCard: View {
     let host: RemoteHostConfig
     let state: RemoteHostConnectionState
+    let actionError: String?
     let onChange: (RemoteHostConfig) -> Void
     let onRemove: () -> Void
     let onConnect: () -> Void
@@ -103,6 +108,7 @@ private struct RemoteHostCard: View {
     init(
         host: RemoteHostConfig,
         state: RemoteHostConnectionState,
+        actionError: String?,
         onChange: @escaping (RemoteHostConfig) -> Void,
         onRemove: @escaping () -> Void,
         onConnect: @escaping () -> Void,
@@ -111,6 +117,7 @@ private struct RemoteHostCard: View {
     ) {
         self.host = host
         self.state = state
+        self.actionError = actionError
         self.onChange = onChange
         self.onRemove = onRemove
         self.onConnect = onConnect
@@ -145,6 +152,13 @@ private struct RemoteHostCard: View {
             }
             .toggleStyle(.switch)
             .tint(TerminalColors.green)
+
+            if let actionError, !actionError.isEmpty {
+                Text(actionError)
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(red: 1.0, green: 0.45, blue: 0.45))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             HStack(spacing: 8) {
                 Button(state.isConnected ? "Disconnect" : "Connect") {
