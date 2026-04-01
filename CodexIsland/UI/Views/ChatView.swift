@@ -358,37 +358,90 @@ struct ChatView: View {
         session.isInTmux && session.tty != nil
     }
 
+    private var messagingPromptText: String {
+        if canSendMessages {
+            return "Message Codex..."
+        }
+
+        if session.canAttemptFocusTerminal {
+            return "Messaging requires tmux. Open Terminal"
+        }
+
+        return "Open Codex in tmux to enable messaging"
+    }
+
     private var inputBar: some View {
         HStack(spacing: 10) {
-            TextField(canSendMessages ? "Message Codex..." : "Open Codex in tmux to enable messaging", text: $inputText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundColor(canSendMessages ? .white : .white.opacity(0.4))
-                .focused($isInputFocused)
-                .disabled(!canSendMessages)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(Color.white.opacity(canSendMessages ? 0.08 : 0.04))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20)
-                                .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-                        )
-                )
-                .onSubmit {
-                    sendMessage()
-                }
+            if canSendMessages {
+                TextField(messagingPromptText, text: $inputText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundColor(.white)
+                    .focused($isInputFocused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(Color.white.opacity(0.08))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20)
+                                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            )
+                    )
+                    .onSubmit {
+                        sendMessage()
+                    }
 
-            Button {
-                sendMessage()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(!canSendMessages || inputText.isEmpty ? .white.opacity(0.2) : .white.opacity(0.9))
+                Button {
+                    sendMessage()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundColor(inputText.isEmpty ? .white.opacity(0.2) : .white.opacity(0.9))
+                }
+                .buttonStyle(.plain)
+                .disabled(inputText.isEmpty)
+            } else {
+                Button {
+                    if session.canAttemptFocusTerminal {
+                        focusTerminal()
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(session.canAttemptFocusTerminal ? .white.opacity(0.75) : .white.opacity(0.35))
+
+                        Text(messagingPromptText)
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(session.canAttemptFocusTerminal ? 0.65 : 0.4))
+
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(Color.white.opacity(0.04))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20)
+                                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(!session.canAttemptFocusTerminal)
+
+                Button {
+                    focusTerminal()
+                } label: {
+                    Image(systemName: "arrow.up.forward.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundColor(session.canAttemptFocusTerminal ? .white.opacity(0.9) : .white.opacity(0.2))
+                }
+                .buttonStyle(.plain)
+                .disabled(!session.canAttemptFocusTerminal)
             }
-            .buttonStyle(.plain)
-            .disabled(!canSendMessages || inputText.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
