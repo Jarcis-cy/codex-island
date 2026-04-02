@@ -11,6 +11,13 @@ nonisolated enum PendingInteractionTransport: Equatable, Sendable {
     case codexLocal(callId: String?, turnId: String?)
     case remoteAppServer(requestId: RemoteRPCID)
     case hookPermission(toolUseId: String)
+
+    var isLocalCodex: Bool {
+        if case .codexLocal = self {
+            return true
+        }
+        return false
+    }
 }
 
 nonisolated struct InteractionPermissionProfile: Equatable, Sendable {

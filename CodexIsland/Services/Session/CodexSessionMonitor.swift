@@ -177,19 +177,21 @@ class CodexSessionMonitor: ObservableObject {
         }
     }
 
-    func respond(sessionId: String, answers: PendingInteractionAnswerPayload) {
-        Task {
-            guard let session = await SessionStore.shared.session(for: sessionId),
-                  case .userInput(let interaction)? = session.primaryPendingInteraction,
-                  interaction.transport.isLocalCodex,
-                  interaction.supportsInlineResponse,
-                  let steps = localUserInputSteps(for: interaction, answers: answers),
-                  await NativeTerminalInputSender.shared.send(steps: steps, to: session) else {
-                return
-            }
+    func respond(sessionId: String, answers: PendingInteractionAnswerPayload) async -> Bool {
+        guard let session = await SessionStore.shared.session(for: sessionId),
+              case .userInput(let interaction)? = session.primaryPendingInteraction,
+              interaction.transport.isLocalCodex,
+              interaction.supportsInlineResponse,
+              let steps = localUserInputSteps(for: interaction, answers: answers),
+              await NativeTerminalInputSender.shared.send(steps: steps, to: session) else {
+            return false
+        }
 
+        let isTerminalAnswer = answers.answers.keys.count == interaction.questions.count
+        if isTerminalAnswer {
             await refreshSessionAfterInteraction(session)
         }
+        return true
     }
 
     /// Archive (remove) a session from the instances list
@@ -297,7 +299,7 @@ class CodexSessionMonitor: ObservableObject {
         var steps: [TerminalInputStep] = []
 
         for question in interaction.questions {
-            guard let questionAnswers = answers.answers[question.id] else { return nil }
+            guard let questionAnswers = answers.answers[question.id] else { continue }
 
             if question.isChoiceQuestion {
                 guard let selectedLabel = questionAnswers.first,
@@ -320,15 +322,6 @@ class CodexSessionMonitor: ObservableObject {
 }
 
 // MARK: - Interrupt Watcher Delegate
-
-private extension PendingInteractionTransport {
-    var isLocalCodex: Bool {
-        if case .codexLocal = self {
-            return true
-        }
-        return false
-    }
-}
 
 extension CodexSessionMonitor: JSONLInterruptWatcherDelegate {
     nonisolated func didDetectInterrupt(sessionId: String) {

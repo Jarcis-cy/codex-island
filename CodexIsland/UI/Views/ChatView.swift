@@ -74,7 +74,7 @@ struct ChatView: View {
                             respondToApproval(action)
                         },
                         onSubmitAnswers: { answers in
-                            respondToQuestions(answers)
+                            await respondToQuestions(answers)
                         },
                         onOpenTerminal: {
                             focusTerminal()
@@ -490,8 +490,8 @@ struct ChatView: View {
         sessionMonitor.respond(sessionId: session.sessionId, action: action)
     }
 
-    private func respondToQuestions(_ answers: PendingInteractionAnswerPayload) {
-        sessionMonitor.respond(sessionId: session.sessionId, answers: answers)
+    private func respondToQuestions(_ answers: PendingInteractionAnswerPayload) async -> Bool {
+        await sessionMonitor.respond(sessionId: session.sessionId, answers: answers)
     }
 
     private func sendMessage() {
@@ -1019,12 +1019,13 @@ struct PendingInteractionBar: View {
     let canRespondInline: Bool
     let canOpenTerminal: Bool
     let onApprovalAction: (PendingApprovalAction) -> Void
-    let onSubmitAnswers: (PendingInteractionAnswerPayload) -> Void
+    let onSubmitAnswers: (PendingInteractionAnswerPayload) async -> Bool
     let onOpenTerminal: () -> Void
 
     @State private var currentQuestionIndex = 0
     @State private var selectedAnswers: [String: String] = [:]
     @State private var textAnswer = ""
+    @State private var isSubmitting = false
 
     @State private var showContent = false
     @State private var showButton = false
@@ -1134,7 +1135,9 @@ struct PendingInteractionBar: View {
                         ForEach(Array(question.options.enumerated()), id: \.offset) { _, option in
                             Button {
                                 selectedAnswers[question.id] = option.label
-                                advanceOrSubmit(request: request)
+                                Task {
+                                    await advanceOrSubmit(request: request)
+                                }
                             } label: {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(option.label)
@@ -1156,6 +1159,7 @@ struct PendingInteractionBar: View {
                                 )
                             }
                             .buttonStyle(.plain)
+                            .disabled(isSubmitting)
                         }
                     }
                 } else {
@@ -1176,12 +1180,16 @@ struct PendingInteractionBar: View {
                             )
                             .onSubmit {
                                 selectedAnswers[question.id] = textAnswer
-                                advanceOrSubmit(request: request)
+                                Task {
+                                    await advanceOrSubmit(request: request)
+                                }
                             }
 
                         Button {
                             selectedAnswers[question.id] = textAnswer
-                            advanceOrSubmit(request: request)
+                            Task {
+                                await advanceOrSubmit(request: request)
+                            }
                         } label: {
                             Text(currentQuestionIndex + 1 == request.questions.count ? "Send" : "Next")
                                 .font(.system(size: 13, weight: .medium))
@@ -1192,14 +1200,39 @@ struct PendingInteractionBar: View {
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
-                        .disabled(textAnswer.isEmpty)
+                        .disabled(textAnswer.isEmpty || isSubmitting)
                     }
+                }
+
+                if isSubmitting {
+                    Text("Sending answer to terminal...")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.4))
                 }
             }
         }
     }
 
-    private func advanceOrSubmit(request: PendingUserInputInteraction) {
+    private func advanceOrSubmit(request: PendingUserInputInteraction) async {
+        guard let question = request.questions[safe: currentQuestionIndex] else { return }
+        guard let value = selectedAnswers[question.id] else { return }
+
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        if request.transport.isLocalCodex {
+            let success = await onSubmitAnswers(PendingInteractionAnswerPayload(
+                answers: [question.id: value.isEmpty ? [] : [value]]
+            ))
+            guard success else { return }
+
+            if currentQuestionIndex + 1 < request.questions.count {
+                currentQuestionIndex += 1
+                textAnswer = selectedAnswers[request.questions[currentQuestionIndex].id] ?? ""
+            }
+            return
+        }
+
         if currentQuestionIndex + 1 < request.questions.count {
             currentQuestionIndex += 1
             textAnswer = selectedAnswers[request.questions[currentQuestionIndex].id] ?? ""
@@ -1208,13 +1241,13 @@ struct PendingInteractionBar: View {
 
         var answers: [String: [String]] = [:]
         for question in request.questions {
-            if let value = selectedAnswers[question.id], !value.isEmpty {
-                answers[question.id] = [value]
+            if let answer = selectedAnswers[question.id], !answer.isEmpty {
+                answers[question.id] = [answer]
             } else {
                 answers[question.id] = []
             }
         }
-        onSubmitAnswers(PendingInteractionAnswerPayload(answers: answers))
+        _ = await onSubmitAnswers(PendingInteractionAnswerPayload(answers: answers))
     }
 }
 

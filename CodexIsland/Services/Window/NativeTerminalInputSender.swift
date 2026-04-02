@@ -54,7 +54,10 @@ actor NativeTerminalInputSender {
         let terminalName = session.terminalName?.lowercased()
 
         if bundleId == "com.mitchellh.ghostty" || terminalName == "ghostty" {
-            return await sendToGhostty(steps: steps, session: session)
+            if await sendToGhostty(steps: steps, session: session) {
+                return true
+            }
+            return await focusAndSendKeystrokes(steps: steps, session: session)
         }
 
         if bundleId == "com.googlecode.iterm2" || terminalName?.contains("iterm") == true {
@@ -101,6 +104,7 @@ actor NativeTerminalInputSender {
             case .text(let text):
                 script = """
                 tell application "Ghostty"
+                    focus \(target)
                     input text "\(appleScriptEscaped(text))" to \(target)
                 end tell
                 return "ok"
@@ -108,6 +112,7 @@ actor NativeTerminalInputSender {
             case .key(let key):
                 script = """
                 tell application "Ghostty"
+                    focus \(target)
                     send key "\(appleScriptEscaped(key))" to \(target)
                 end tell
                 return "ok"
@@ -115,6 +120,7 @@ actor NativeTerminalInputSender {
             case .enter:
                 script = """
                 tell application "Ghostty"
+                    focus \(target)
                     send key "enter" to \(target)
                 end tell
                 return "ok"
@@ -122,6 +128,7 @@ actor NativeTerminalInputSender {
             case .escape:
                 script = """
                 tell application "Ghostty"
+                    focus \(target)
                     send key "escape" to \(target)
                 end tell
                 return "ok"

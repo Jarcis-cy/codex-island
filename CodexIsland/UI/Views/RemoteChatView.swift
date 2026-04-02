@@ -58,7 +58,7 @@ struct RemoteChatView: View {
                         respondToApproval(action)
                     },
                     onSubmitAnswers: { answers in
-                        respondToQuestions(answers)
+                        await respondToQuestions(answers)
                     },
                     onOpenTerminal: {}
                 )
@@ -311,10 +311,13 @@ struct RemoteChatView: View {
         }
     }
 
-    private func respondToQuestions(_ answers: PendingInteractionAnswerPayload) {
-        guard case .userInput(let interaction)? = pendingInteraction else { return }
-        Task {
-            try? await remoteSessionMonitor.respond(thread: thread, interaction: interaction, answers: answers)
+    private func respondToQuestions(_ answers: PendingInteractionAnswerPayload) async -> Bool {
+        guard case .userInput(let interaction)? = pendingInteraction else { return false }
+        do {
+            try await remoteSessionMonitor.respond(thread: thread, interaction: interaction, answers: answers)
+            return true
+        } catch {
+            return false
         }
     }
 }
