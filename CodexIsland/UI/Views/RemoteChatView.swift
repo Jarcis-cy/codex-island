@@ -17,6 +17,7 @@ enum RemoteSlashCommand: String, CaseIterable, Identifiable {
     case plan = "/plan"
     case model = "/model"
     case permissions = "/permissions"
+    case new = "/new"
     case resume = "/resume"
 
     var id: String { rawValue }
@@ -35,6 +36,8 @@ enum RemoteSlashCommand: String, CaseIterable, Identifiable {
             return "选择模型与 reasoning"
         case .permissions:
             return "选择权限 preset"
+        case .new:
+            return "新建空白远端会话"
         case .resume:
             return "恢复保存的远端线程"
         }
@@ -42,6 +45,15 @@ enum RemoteSlashCommand: String, CaseIterable, Identifiable {
 
     var supportsInlineArgs: Bool {
         self == .plan
+    }
+
+    var requiresStartableThread: Bool {
+        switch self {
+        case .plan, .model, .permissions:
+            return true
+        case .new, .resume:
+            return false
+        }
     }
 
     static func matches(for text: String) -> [RemoteSlashCommand] {
@@ -821,7 +833,7 @@ struct RemoteChatView: View {
     }
 
     private func handleSlashCommand(_ command: RemoteSlashCommand, args: String?) {
-        guard thread.canStartTurn else {
+        guard !command.requiresStartableThread || thread.canStartTurn else {
             slashFeedbackMessage = "'/\(command.bareName)' is disabled while a task is in progress."
             return
         }
@@ -848,6 +860,10 @@ struct RemoteChatView: View {
             }
         case .permissions:
             activeSlashPanel = .permissions
+        case .new:
+            Task {
+                await startNewRemoteThread()
+            }
         case .resume:
             activeSlashPanel = .resume
             Task {
@@ -1134,6 +1150,31 @@ struct RemoteChatView: View {
         }
     }
 
+    private func startNewRemoteThread() async {
+        await MainActor.run {
+            isExecutingSlashAction = true
+        }
+        defer {
+            Task { @MainActor in
+                isExecutingSlashAction = false
+            }
+        }
+
+        do {
+            let opened = try await remoteSessionMonitor.startFreshThread(hostId: thread.hostId)
+            await MainActor.run {
+                activeSlashPanel = nil
+                slashFeedbackMessage = nil
+                thread = opened
+                viewModel.showRemoteChat(for: opened)
+            }
+        } catch {
+            await MainActor.run {
+                slashFeedbackMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func resumeRemoteThread(_ candidate: RemoteThreadState) async {
         await MainActor.run {
             isExecutingSlashAction = true
@@ -1152,6 +1193,7 @@ struct RemoteChatView: View {
             await MainActor.run {
                 activeSlashPanel = nil
                 slashFeedbackMessage = nil
+                thread = opened
                 viewModel.showRemoteChat(for: opened)
             }
         } catch {

@@ -260,7 +260,9 @@ class NotchViewModel: ObservableObject {
         }
 
         if let remoteThread = currentRemoteChatThread {
-            if case .remoteChat(let current) = contentType, current.stableId == remoteThread.stableId {
+            if case .remoteChat(let current) = contentType,
+               current.stableId == remoteThread.stableId,
+               current.threadId == remoteThread.threadId {
                 return
             }
             contentType = .remoteChat(remoteThread)
@@ -309,10 +311,13 @@ class NotchViewModel: ObservableObject {
     }
 
     func showRemoteChat(for thread: RemoteThreadState) {
-        if case .remoteChat(let current) = contentType, current.stableId == thread.stableId {
+        if case .remoteChat(let current) = contentType,
+           current.stableId == thread.stableId,
+           current.threadId == thread.threadId {
             return
         }
         currentChatLogicalSessionId = nil
+        currentRemoteChatThread = thread
         contentType = .remoteChat(thread)
     }
 

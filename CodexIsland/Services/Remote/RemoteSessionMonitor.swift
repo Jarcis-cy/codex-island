@@ -166,6 +166,8 @@ final class RemoteSessionMonitor: ObservableObject {
     private var hostThreadFilters: [String: String] = [:]
     private var hostThreadFilterTasks: [String: Task<Void, Never>] = [:]
     private var optimisticUserMessages: [OptimisticRemoteUserMessage] = []
+    private var rawThreadsByHost: [String: [String: RemoteAppServerThread]] = [:]
+    private var preferredThreadBindings: [String: String] = [:]
 
     init(
         initialHosts: [RemoteHostConfig]? = nil,
@@ -210,6 +212,59 @@ final class RemoteSessionMonitor: ObservableObject {
 
     private func threadIndex(logicalSessionId: String) -> Int? {
         threads.firstIndex(where: { $0.logicalSessionId == logicalSessionId })
+    }
+
+    private func threadState(hostId: String, threadId: String) -> RemoteThreadState? {
+        guard let index = threadIndex(hostId: hostId, threadId: threadId) else { return nil }
+        return threads[index]
+    }
+
+    private func rawThreads(hostId: String) -> [RemoteAppServerThread] {
+        Array(rawThreadsByHost[hostId, default: [:]].values)
+    }
+
+    private func replaceRawThreads(hostId: String, with remoteThreads: [RemoteAppServerThread]) {
+        rawThreadsByHost[hostId] = Dictionary(uniqueKeysWithValues: remoteThreads.map { ($0.id, $0) })
+    }
+
+    private func upsertRawThread(hostId: String, thread: RemoteAppServerThread) {
+        rawThreadsByHost[hostId, default: [:]][thread.id] = thread
+    }
+
+    private func removeRawThreads(hostId: String) {
+        rawThreadsByHost.removeValue(forKey: hostId)
+        optimisticUserMessages.removeAll { $0.hostId == hostId }
+    }
+
+    private func clearPreferredThreadBinding(logicalSessionId: String) {
+        preferredThreadBindings.removeValue(forKey: logicalSessionId)
+    }
+
+    private func setPreferredThreadBinding(logicalSessionId: String, threadId: String) {
+        preferredThreadBindings[logicalSessionId] = threadId
+    }
+
+    private func clearPreferredThreadBindings(for hostId: String) {
+        let hostLogicalIds = Set(
+            rawThreads(hostId: hostId).map { rawThread in
+                logicalSessionId(
+                    sshTarget: hosts.first(where: { $0.id == hostId })?.sshTarget ?? "",
+                    cwd: rawThread.cwd
+                )
+            } + threads.filter { $0.hostId == hostId }.map(\.logicalSessionId)
+        )
+        for logicalSessionId in hostLogicalIds {
+            preferredThreadBindings.removeValue(forKey: logicalSessionId)
+        }
+    }
+
+    private func latestThread(from candidates: [RemoteAppServerThread]) -> RemoteAppServerThread? {
+        candidates.max(by: { lhs, rhs in
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt < rhs.updatedAt
+            }
+            return lhs.createdAt < rhs.createdAt
+        })
     }
 
     private func provisionalThreadFilter(for host: RemoteHostConfig) -> String? {
@@ -393,9 +448,11 @@ final class RemoteSessionMonitor: ObservableObject {
 
     func removeHost(id: String) {
         markStateChanged()
+        clearPreferredThreadBindings(for: id)
         hosts.removeAll { $0.id == id }
         hostStates.removeValue(forKey: id)
         threads.removeAll { $0.hostId == id }
+        removeRawThreads(hostId: id)
         hostThreadFilters.removeValue(forKey: id)
         hostThreadFilterTasks[id]?.cancel()
         hostThreadFilterTasks.removeValue(forKey: id)
@@ -434,12 +491,27 @@ final class RemoteSessionMonitor: ObservableObject {
         hostActionTasks.removeValue(forKey: id)
         hostThreadFilterTasks[id]?.cancel()
         hostThreadFilterTasks.removeValue(forKey: id)
+        clearPreferredThreadBindings(for: id)
+        threads.removeAll { $0.hostId == id }
+        removeRawThreads(hostId: id)
         if let connection = connections.removeValue(forKey: id) {
             Task { await connection.stop() }
         }
     }
 
     func startThread(hostId: String) async throws -> RemoteThreadState {
+        try await startThread(hostId: hostId, reusingExistingLogicalSession: true, pinPreferredBinding: false)
+    }
+
+    func startFreshThread(hostId: String) async throws -> RemoteThreadState {
+        try await startThread(hostId: hostId, reusingExistingLogicalSession: false, pinPreferredBinding: true)
+    }
+
+    private func startThread(
+        hostId: String,
+        reusingExistingLogicalSession: Bool,
+        pinPreferredBinding: Bool
+    ) async throws -> RemoteThreadState {
         guard let host = hosts.first(where: { $0.id == hostId }) else {
             throw RemoteSessionError.invalidConfiguration("Remote host no longer exists")
         }
@@ -447,25 +519,30 @@ final class RemoteSessionMonitor: ObservableObject {
             throw RemoteSessionError.notConnected
         }
         let normalizedDefaultCwd = try await connection.normalizeCwd(host.defaultCwd)
-        if let normalizedDefaultCwd,
+        if reusingExistingLogicalSession,
+           let normalizedDefaultCwd,
            let existingThread = threads.first(where: {
                $0.hostId == hostId &&
                $0.logicalSessionId == logicalSessionId(for: host, cwd: normalizedDefaultCwd)
            }) {
             return existingThread
         }
-        let existingThreadIds = Set(
-            threads
-                .filter { $0.hostId == hostId }
-                .map(\.threadId)
-        )
+        let existingThreadIds = Set(rawThreads(hostId: hostId).map(\.id))
 
         do {
             let response = try await connection.startThread(defaultCwd: host.defaultCwd)
             let thread = response.thread
             markStateChanged()
             hostActionErrors.removeValue(forKey: hostId)
-            apply(event: .threadUpsert(hostId: hostId, thread: thread))
+            let logicalSessionId = logicalSessionId(
+                sshTarget: host.sshTarget,
+                cwd: thread.cwd
+            )
+            if pinPreferredBinding {
+                setPreferredThreadBinding(logicalSessionId: logicalSessionId, threadId: thread.id)
+            }
+            upsertRawThread(hostId: hostId, thread: thread)
+            refreshVisibleLogicalSession(hostId: hostId, logicalSessionId: logicalSessionId)
             updateTurnContextSnapshot(
                 hostId: hostId,
                 threadId: thread.id,
@@ -481,7 +558,7 @@ final class RemoteSessionMonitor: ObservableObject {
             Task {
                 try? await connection.refreshThreads()
             }
-            guard let state = threads.first(where: { $0.hostId == hostId && $0.threadId == thread.id }) else {
+            guard let state = threadState(hostId: hostId, threadId: thread.id) else {
                 throw RemoteSessionError.missingThread
             }
             return state
@@ -489,7 +566,11 @@ final class RemoteSessionMonitor: ObservableObject {
             markStateChanged()
             if case .timeout = (error as? RemoteSessionError) {
                 try? await connection.refreshThreads()
-                if let recovered = recoverNewThread(hostId: hostId, excluding: existingThreadIds) {
+                if let recovered = recoverNewThread(
+                    hostId: hostId,
+                    excluding: existingThreadIds,
+                    pinPreferredBinding: pinPreferredBinding
+                ) {
                     hostActionErrors.removeValue(forKey: hostId)
                     await logMonitorEvent(
                         level: .warning,
@@ -517,13 +598,22 @@ final class RemoteSessionMonitor: ObservableObject {
         guard let connection = connections[hostId] else {
             throw RemoteSessionError.notConnected
         }
+        guard let host = hosts.first(where: { $0.id == hostId }) else {
+            throw RemoteSessionError.invalidConfiguration("Remote host no longer exists")
+        }
 
         do {
             let response = try await connection.resumeThread(threadId: threadId, turnContext: nil)
             let thread = response.thread
             markStateChanged()
             hostActionErrors.removeValue(forKey: hostId)
-            apply(event: .threadUpsert(hostId: hostId, thread: thread))
+            let logicalSessionId = logicalSessionId(
+                sshTarget: host.sshTarget,
+                cwd: thread.cwd
+            )
+            setPreferredThreadBinding(logicalSessionId: logicalSessionId, threadId: thread.id)
+            upsertRawThread(hostId: hostId, thread: thread)
+            refreshVisibleLogicalSession(hostId: hostId, logicalSessionId: logicalSessionId)
             updateTurnContextSnapshot(
                 hostId: hostId,
                 threadId: thread.id,
@@ -539,7 +629,7 @@ final class RemoteSessionMonitor: ObservableObject {
             Task {
                 try? await connection.refreshThreads()
             }
-            guard let state = threads.first(where: { $0.hostId == hostId && $0.threadId == thread.id }) else {
+            guard let state = threadState(hostId: hostId, threadId: thread.id) else {
                 throw RemoteSessionError.missingThread
             }
             return state
@@ -720,6 +810,9 @@ final class RemoteSessionMonitor: ObservableObject {
             Task { await connection.stop() }
             connections.removeValue(forKey: id)
             hostStates[id] = .disconnected
+            clearPreferredThreadBindings(for: id)
+            threads.removeAll { $0.hostId == id }
+            removeRawThreads(hostId: id)
             hostThreadFilters.removeValue(forKey: id)
             hostThreadFilterTasks[id]?.cancel()
             hostThreadFilterTasks.removeValue(forKey: id)
@@ -755,7 +848,12 @@ final class RemoteSessionMonitor: ObservableObject {
             applyThreadList(hostId: hostId, remoteThreads: remoteThreads)
 
         case .threadUpsert(let hostId, let thread):
-            upsertThread(hostId: hostId, thread: thread, replaceHistory: !thread.turns.isEmpty)
+            upsertRawThread(hostId: hostId, thread: thread)
+            let logicalSessionId = logicalSessionId(
+                sshTarget: hosts.first(where: { $0.id == hostId })?.sshTarget ?? "",
+                cwd: thread.cwd
+            )
+            refreshVisibleLogicalSession(hostId: hostId, logicalSessionId: logicalSessionId)
 
         case .threadStatusChanged(let hostId, let threadId, let status):
             guard let index = threadIndex(hostId: hostId, threadId: threadId) else { return }
@@ -862,6 +960,7 @@ final class RemoteSessionMonitor: ObservableObject {
 
     private func applyThreadList(hostId: String, remoteThreads: [RemoteAppServerThread]) {
         let host = hosts.first(where: { $0.id == hostId })
+        replaceRawThreads(hostId: hostId, with: remoteThreads)
         let visibleThreads = remoteThreads.filter { shouldDisplayThread($0, for: host) }
         let groupedThreads = Dictionary(grouping: visibleThreads) { thread in
             logicalSessionId(
@@ -877,20 +976,45 @@ final class RemoteSessionMonitor: ObservableObject {
             $0.hostId == hostId && !survivingThreadIds.contains($0.threadId)
         }
 
-        for candidates in groupedThreads.values {
-            guard let latestThread = candidates.max(by: { lhs, rhs in
-                if lhs.updatedAt != rhs.updatedAt {
-                    return lhs.updatedAt < rhs.updatedAt
-                }
-                return lhs.createdAt < rhs.createdAt
-            }) else {
-                continue
-            }
-            upsertThread(hostId: hostId, thread: latestThread, replaceHistory: !latestThread.turns.isEmpty)
+        for logicalSessionId in groupedThreads.keys {
+            refreshVisibleLogicalSession(hostId: hostId, logicalSessionId: logicalSessionId)
         }
     }
 
-    private func upsertThread(hostId: String, thread: RemoteAppServerThread, replaceHistory: Bool) {
+    private func refreshVisibleLogicalSession(hostId: String, logicalSessionId: String) {
+        let host = hosts.first(where: { $0.id == hostId })
+        let visibleCandidates = rawThreads(hostId: hostId).filter { thread in
+            shouldDisplayThread(thread, for: host) &&
+            self.logicalSessionId(
+                sshTarget: host?.sshTarget ?? "",
+                cwd: thread.cwd
+            ) == logicalSessionId
+        }
+
+        guard !visibleCandidates.isEmpty else {
+            clearPreferredThreadBinding(logicalSessionId: logicalSessionId)
+            threads.removeAll { $0.hostId == hostId && $0.logicalSessionId == logicalSessionId }
+            return
+        }
+
+        let selectedThread: RemoteAppServerThread
+        if let preferredThreadId = preferredThreadBindings[logicalSessionId],
+           let preferredThread = visibleCandidates.first(where: { $0.id == preferredThreadId }) {
+            selectedThread = preferredThread
+        } else {
+            clearPreferredThreadBinding(logicalSessionId: logicalSessionId)
+            guard let latestThread = latestThread(from: visibleCandidates) else { return }
+            selectedThread = latestThread
+        }
+
+        upsertVisibleThread(
+            hostId: hostId,
+            thread: selectedThread,
+            replaceHistory: !selectedThread.turns.isEmpty
+        )
+    }
+
+    private func upsertVisibleThread(hostId: String, thread: RemoteAppServerThread, replaceHistory: Bool) {
         let host = hosts.first(where: { $0.id == hostId })
         guard shouldDisplayThread(thread, for: host) else { return }
         let hostName = host?.displayName ?? "Remote Host"
@@ -1151,18 +1275,57 @@ final class RemoteSessionMonitor: ObservableObject {
     }
 
     func availableThreads(hostId: String, excluding threadId: String? = nil) -> [RemoteThreadState] {
-        threads
+        rawThreads(hostId: hostId)
             .filter { thread in
-                guard thread.hostId == hostId else { return false }
                 guard let excluding = threadId else { return true }
-                return thread.threadId != excluding
+                return thread.id != excluding
             }
+            .map { makeThreadCandidateState(hostId: hostId, thread: $0) }
             .sorted { lhs, rhs in
                 if lhs.updatedAt != rhs.updatedAt {
                     return lhs.updatedAt > rhs.updatedAt
                 }
                 return lhs.createdAt > rhs.createdAt
             }
+    }
+
+    private func makeThreadCandidateState(hostId: String, thread: RemoteAppServerThread) -> RemoteThreadState {
+        if let state = threadState(hostId: hostId, threadId: thread.id) {
+            return state
+        }
+
+        let host = hosts.first(where: { $0.id == hostId })
+        let connectionState = hostStates[hostId] ?? .disconnected
+        let computedTurn = thread.turns.last(where: { $0.status == .inProgress })
+
+        return RemoteThreadState(
+            hostId: hostId,
+            hostName: host?.displayName ?? "Remote Host",
+            threadId: thread.id,
+            logicalSessionId: logicalSessionId(
+                sshTarget: host?.sshTarget ?? "",
+                cwd: thread.cwd
+            ),
+            preview: thread.preview,
+            name: thread.name,
+            cwd: thread.cwd,
+            phase: phase(from: thread.status, pendingApproval: nil, activeTurnId: computedTurn?.id),
+            lastActivity: remoteDate(thread.updatedAt),
+            createdAt: remoteDate(thread.createdAt),
+            updatedAt: remoteDate(thread.updatedAt),
+            lastMessage: nil,
+            lastMessageRole: nil,
+            lastToolName: nil,
+            lastUserMessageDate: nil,
+            history: [],
+            activeTurnId: computedTurn?.id,
+            isLoaded: thread.status != .notLoaded,
+            canSteerTurn: computedTurn != nil,
+            pendingApproval: nil,
+            pendingInteractions: [],
+            connectionState: connectionState,
+            turnContext: .empty
+        )
     }
 
     func appendLocalInfoMessage(thread: RemoteThreadState, message: String) {
@@ -1178,11 +1341,32 @@ final class RemoteSessionMonitor: ObservableObject {
         updateDerivedFields(at: index)
     }
 
-    func recoverNewThread(hostId: String, excluding existingIds: Set<String>) -> RemoteThreadState? {
-        let newThreads = threads
-            .filter { $0.hostId == hostId && !existingIds.contains($0.threadId) }
-            .sorted { $0.updatedAt > $1.updatedAt }
-        return newThreads.first
+    func recoverNewThread(
+        hostId: String,
+        excluding existingIds: Set<String>,
+        pinPreferredBinding: Bool
+    ) -> RemoteThreadState? {
+        let newThreads = rawThreads(hostId: hostId)
+            .filter { !existingIds.contains($0.id) }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt {
+                    return lhs.updatedAt > rhs.updatedAt
+                }
+                return lhs.createdAt > rhs.createdAt
+            }
+        guard let recoveredThread = newThreads.first else { return nil }
+
+        let host = hosts.first(where: { $0.id == hostId })
+        let logicalSessionId = logicalSessionId(
+            sshTarget: host?.sshTarget ?? "",
+            cwd: recoveredThread.cwd
+        )
+        if pinPreferredBinding {
+            setPreferredThreadBinding(logicalSessionId: logicalSessionId, threadId: recoveredThread.id)
+        }
+        refreshVisibleLogicalSession(hostId: hostId, logicalSessionId: logicalSessionId)
+        return threadState(hostId: hostId, threadId: recoveredThread.id) ??
+            makeThreadCandidateState(hostId: hostId, thread: recoveredThread)
     }
 
     private func logMonitorEvent(

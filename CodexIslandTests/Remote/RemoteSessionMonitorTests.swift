@@ -503,6 +503,177 @@ final class RemoteSessionMonitorTests: XCTestCase {
         XCTAssertEqual(callbackThread.history.first?.type, .user("hello"))
     }
 
+    func testStartFreshThreadBypassesLogicalSessionReuse() async throws {
+        let logger = TestDiagnosticsLogger()
+        let connection = FakeRemoteConnection()
+        let host = RemoteHostConfig(id: "host-1", name: "Remote", sshTarget: "ssh-target", defaultCwd: "/repo", isEnabled: true)
+        let existingThread = makeThread(id: "thread-existing", preview: "Existing", cwd: "/repo")
+        let freshThread = makeThread(id: "thread-new", preview: "Fresh", cwd: "/repo")
+        final class StartTracker: @unchecked Sendable {
+            var didCallStart = false
+        }
+        let tracker = StartTracker()
+
+        connection.startThreadHandler = { _ in
+            tracker.didCallStart = true
+            return makeThreadStartResponse(thread: freshThread)
+        }
+
+        let monitor = RemoteSessionMonitor(
+            initialHosts: [host],
+            loadHosts: { [host] in [host] },
+            saveHosts: { _ in },
+            diagnosticsLogger: logger,
+            connectionFactory: { _, emit in
+                connection.emit = emit
+                return connection
+            }
+        )
+        TestObjectRetainer.retain(monitor)
+
+        monitor.startMonitoring()
+        monitor.apply(event: .threadUpsert(hostId: host.id, thread: existingThread))
+
+        let opened = try await monitor.startFreshThread(hostId: host.id)
+
+        XCTAssertTrue(tracker.didCallStart)
+        XCTAssertEqual(opened.threadId, "thread-new")
+        XCTAssertEqual(monitor.threads.count, 1)
+        XCTAssertEqual(monitor.threads.first?.threadId, "thread-new")
+        XCTAssertEqual(
+            Set(monitor.availableThreads(hostId: host.id).map(\.threadId)),
+            Set(["thread-existing", "thread-new"])
+        )
+    }
+
+    func testAvailableThreadsIncludesHiddenSameCwdThreads() async {
+        let logger = TestDiagnosticsLogger()
+        let connection = FakeRemoteConnection()
+        let host = RemoteHostConfig(id: "host-1", name: "Remote", sshTarget: "ssh-target", defaultCwd: "/repo", isEnabled: true)
+        let olderThread = makeThread(id: "thread-older", preview: "Older", cwd: "/repo")
+        let newerThread = RemoteAppServerThread(
+            id: "thread-newer",
+            preview: "Newer",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 1_700_000_100,
+            updatedAt: 1_700_000_200,
+            status: .idle,
+            path: nil,
+            cwd: "/repo",
+            cliVersion: "1.0.0",
+            name: nil,
+            turns: []
+        )
+
+        let monitor = RemoteSessionMonitor(
+            initialHosts: [host],
+            loadHosts: { [host] in [host] },
+            saveHosts: { _ in },
+            diagnosticsLogger: logger,
+            connectionFactory: { _, emit in
+                connection.emit = emit
+                return connection
+            }
+        )
+        TestObjectRetainer.retain(monitor)
+
+        monitor.startMonitoring()
+        monitor.apply(event: .threadList(hostId: host.id, threads: [olderThread, newerThread]))
+
+        XCTAssertEqual(monitor.threads.count, 1)
+        XCTAssertEqual(monitor.threads.first?.threadId, "thread-newer")
+        XCTAssertEqual(
+            monitor.availableThreads(hostId: host.id, excluding: "thread-newer").map(\.threadId),
+            ["thread-older"]
+        )
+    }
+
+    func testOpenThreadKeepsExplicitSameCwdSelectionAfterRefresh() async throws {
+        let logger = TestDiagnosticsLogger()
+        let connection = FakeRemoteConnection()
+        let host = RemoteHostConfig(id: "host-1", name: "Remote", sshTarget: "ssh-target", defaultCwd: "/repo", isEnabled: true)
+        let olderThread = RemoteAppServerThread(
+            id: "thread-older",
+            preview: "Older",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 1_700_000_000,
+            updatedAt: 1_700_000_050,
+            status: .idle,
+            path: nil,
+            cwd: "/repo",
+            cliVersion: "1.0.0",
+            name: nil,
+            turns: []
+        )
+        let newerThread = RemoteAppServerThread(
+            id: "thread-newer",
+            preview: "Newer",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 1_700_000_100,
+            updatedAt: 1_700_000_200,
+            status: .idle,
+            path: nil,
+            cwd: "/repo",
+            cliVersion: "1.0.0",
+            name: nil,
+            turns: []
+        )
+        let resumedOlderThread = RemoteAppServerThread(
+            id: "thread-older",
+            preview: "Older",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 1_700_000_000,
+            updatedAt: 1_700_000_050,
+            status: .idle,
+            path: nil,
+            cwd: "/repo",
+            cliVersion: "1.0.0",
+            name: nil,
+            turns: [
+                RemoteAppServerTurn(
+                    id: "turn-1",
+                    items: [.userMessage(id: "user-1", content: [.text("resume me")])],
+                    status: .completed,
+                    error: nil
+                )
+            ]
+        )
+
+        connection.resumeThreadHandler = { threadId, _ in
+            XCTAssertEqual(threadId, "thread-older")
+            return makeThreadResumeResponse(thread: resumedOlderThread)
+        }
+
+        let monitor = RemoteSessionMonitor(
+            initialHosts: [host],
+            loadHosts: { [host] in [host] },
+            saveHosts: { _ in },
+            diagnosticsLogger: logger,
+            connectionFactory: { _, emit in
+                connection.emit = emit
+                return connection
+            }
+        )
+        TestObjectRetainer.retain(monitor)
+
+        monitor.startMonitoring()
+        monitor.apply(event: .threadList(hostId: host.id, threads: [olderThread, newerThread]))
+        XCTAssertEqual(monitor.threads.first?.threadId, "thread-newer")
+
+        let opened = try await monitor.openThread(hostId: host.id, threadId: "thread-older")
+        XCTAssertEqual(opened.threadId, "thread-older")
+        XCTAssertEqual(opened.history.first?.type, .user("resume me"))
+
+        monitor.apply(event: .threadList(hostId: host.id, threads: [olderThread, newerThread]))
+
+        XCTAssertEqual(monitor.threads.count, 1)
+        XCTAssertEqual(monitor.threads.first?.threadId, "thread-older")
+    }
+
     func testCreateThreadDoesNotResumeFreshlyStartedEmptyThread() async throws {
         let logger = TestDiagnosticsLogger()
         let connection = FakeRemoteConnection()

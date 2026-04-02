@@ -69,6 +69,12 @@ final class RemoteAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(action, .rejectSlashCommand("Unsupported remote command: /unknown"))
     }
 
+    func testRemoteSlashSubmitActionRecognizesNewCommand() {
+        let action = RemoteSlashCommand.submitAction(for: "/new")
+
+        XCTAssertEqual(action, .command(.new, args: nil))
+    }
+
     func testChoiceQuestionWithOtherStillSupportsInlineResponse() {
         let question = PendingInteractionQuestion(
             id: "mode",
