@@ -380,13 +380,24 @@ struct NotchView: View {
                 NotchMenuView(viewModel: viewModel)
             case .remoteHosts:
                 RemoteHostsView(viewModel: viewModel)
-            case .chat(let session):
-                ChatView(
-                    logicalSessionId: session.logicalSessionId,
-                    initialSession: session,
-                    sessionMonitor: sessionMonitor,
-                    viewModel: viewModel
-                )
+            case .chat(let logicalSessionId):
+                if let session = sessionMonitor.instances.first(where: { $0.logicalSessionId == logicalSessionId }) {
+                    ChatView(
+                        logicalSessionId: logicalSessionId,
+                        initialSession: session,
+                        sessionMonitor: sessionMonitor,
+                        viewModel: viewModel
+                    )
+                } else {
+                    CodexInstancesView(
+                        sessionMonitor: sessionMonitor,
+                        remoteSessionMonitor: remoteSessionMonitor,
+                        viewModel: viewModel
+                    )
+                    .onAppear {
+                        viewModel.exitChat()
+                    }
+                }
             case .remoteChat(let thread):
                 RemoteChatView(
                     initialThread: thread,

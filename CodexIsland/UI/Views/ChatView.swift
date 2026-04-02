@@ -10,7 +10,6 @@ import SwiftUI
 
 struct ChatView: View {
     let logicalSessionId: String
-    let initialSession: SessionState
     let sessionMonitor: CodexSessionMonitor
     @ObservedObject var viewModel: NotchViewModel
 
@@ -18,7 +17,8 @@ struct ChatView: View {
     @State private var history: [ChatHistoryItem] = []
     @State private var session: SessionState
     @State private var isLoading: Bool = true
-    @State private var hasLoadedOnce: Bool = false
+    @State private var isSending: Bool = false
+    @State private var sendFailureMessage: String?
     @State private var shouldScrollToBottom: Bool = false
     @State private var isAutoscrollPaused: Bool = false
     @State private var newMessageCount: Int = 0
@@ -28,17 +28,18 @@ struct ChatView: View {
 
     init(logicalSessionId: String, initialSession: SessionState, sessionMonitor: CodexSessionMonitor, viewModel: NotchViewModel) {
         self.logicalSessionId = logicalSessionId
-        self.initialSession = initialSession
         self.sessionMonitor = sessionMonitor
         self._viewModel = ObservedObject(wrappedValue: viewModel)
         self._session = State(initialValue: initialSession)
 
         // Initialize from cache if available (prevents loading flicker on view recreation)
         let cachedHistory = ChatHistoryManager.shared.history(for: logicalSessionId)
-        let alreadyLoaded = !cachedHistory.isEmpty
+        let alreadyLoaded = ChatHistoryManager.shared.isLoaded(
+            logicalSessionId: logicalSessionId,
+            sessionId: initialSession.sessionId
+        )
         self._history = State(initialValue: cachedHistory)
-        self._isLoading = State(initialValue: !alreadyLoaded)
-        self._hasLoadedOnce = State(initialValue: alreadyLoaded)
+        self._isLoading = State(initialValue: !alreadyLoaded && cachedHistory.isEmpty)
     }
 
     private var pendingInteraction: PendingInteraction? {
@@ -49,7 +50,10 @@ struct ChatView: View {
         pendingInteraction != nil
     }
 
-    
+    private var trimmedInputText: String {
+        inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
@@ -63,6 +67,11 @@ struct ChatView: View {
                     emptyState
                 } else {
                     messageList
+                }
+
+                if let sendFailureMessage {
+                    inputStatusBanner(message: sendFailureMessage)
+                        .transition(.opacity)
                 }
 
                 if let pendingInteraction {
@@ -93,29 +102,8 @@ struct ChatView: View {
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: hasPendingInteraction)
         .animation(nil, value: viewModel.status)
-        .task {
-            // Skip if already loaded (prevents redundant work on view recreation)
-            guard !hasLoadedOnce else { return }
-            hasLoadedOnce = true
-
-            // Check if already loaded (from previous visit)
-            if ChatHistoryManager.shared.isLoaded(logicalSessionId: logicalSessionId) {
-                history = ChatHistoryManager.shared.history(for: logicalSessionId)
-                isLoading = false
-                return
-            }
-
-            // Load in background, show loading state
-            await ChatHistoryManager.shared.loadFromFile(
-                logicalSessionId: logicalSessionId,
-                sessionId: session.sessionId,
-                cwd: session.cwd
-            )
-            history = ChatHistoryManager.shared.history(for: logicalSessionId)
-
-            withAnimation(.easeOut(duration: 0.2)) {
-                isLoading = false
-            }
+        .task(id: session.sessionId) {
+            await ensureHistoryLoaded(for: session)
         }
         .onReceive(ChatHistoryManager.shared.$histories) { histories in
             // Update when count changes, last item differs, or content changes (e.g., tool status)
@@ -144,8 +132,14 @@ struct ChatView: View {
                         isLoading = false
                     }
                 }
-            } else if hasLoadedOnce {
-                // Session was loaded but is now gone (removed via /clear) - navigate back
+
+                if newHistory.isEmpty {
+                    isLoading = !ChatHistoryManager.shared.isLoaded(
+                        logicalSessionId: logicalSessionId,
+                        sessionId: session.sessionId
+                    )
+                }
+            } else if !sessionMonitor.instances.contains(where: { $0.logicalSessionId == logicalSessionId }) {
                 viewModel.exitChat()
             }
         }
@@ -161,6 +155,8 @@ struct ChatView: View {
                         shouldScrollToBottom = true
                     }
                 }
+            } else if !sessions.contains(where: { $0.logicalSessionId == logicalSessionId }) {
+                viewModel.exitChat()
             }
         }
         .onChange(of: canSendMessages) { _, canSend in
@@ -268,6 +264,16 @@ struct ChatView: View {
                 .foregroundColor(.white.opacity(0.4))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func inputStatusBanner(message: String) -> some View {
+        Text(message)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(TerminalColors.amber.opacity(0.92))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.black.opacity(0.18))
     }
 
     // MARK: - Message List
@@ -401,10 +407,10 @@ struct ChatView: View {
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 28))
-                        .foregroundColor(inputText.isEmpty ? .white.opacity(0.2) : .white.opacity(0.9))
+                        .foregroundColor(trimmedInputText.isEmpty || isSending ? .white.opacity(0.2) : .white.opacity(0.9))
                 }
                 .buttonStyle(.plain)
-                .disabled(inputText.isEmpty)
+                .disabled(trimmedInputText.isEmpty || isSending)
             } else {
                 Button {
                     if session.canAttemptFocusTerminal {
@@ -481,72 +487,95 @@ struct ChatView: View {
     // MARK: - Actions
 
     private func focusTerminal() {
+        guard let latestSession = latestSession() else { return }
         Task {
-            _ = await TerminalFocusCoordinator.shared.focus(session: session)
+            _ = await TerminalFocusCoordinator.shared.focus(session: latestSession)
         }
     }
 
     private func respondToApproval(_ action: PendingApprovalAction) {
-        sessionMonitor.respond(sessionId: session.sessionId, action: action)
+        guard let latestSession = latestSession() else { return }
+        sessionMonitor.respond(sessionId: latestSession.sessionId, action: action)
     }
 
     private func respondToQuestions(_ answers: PendingInteractionAnswerPayload) async -> Bool {
-        await sessionMonitor.respond(sessionId: session.sessionId, answers: answers)
+        guard let latestSession = latestSession() else { return false }
+        return await sessionMonitor.respond(sessionId: latestSession.sessionId, answers: answers)
     }
 
     private func sendMessage() {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let text = trimmedInputText
+        guard !text.isEmpty, !isSending else { return }
+
+        Task {
+            await attemptSendMessage(text)
+        }
+    }
+
+    @MainActor
+    private func ensureHistoryLoaded(for session: SessionState) async {
+        if ChatHistoryManager.shared.isLoaded(logicalSessionId: logicalSessionId, sessionId: session.sessionId) {
+            history = ChatHistoryManager.shared.history(for: logicalSessionId)
+            isLoading = false
+            return
+        }
+
+        if history.isEmpty {
+            isLoading = true
+        }
+
+        await ChatHistoryManager.shared.loadFromFile(
+            logicalSessionId: logicalSessionId,
+            sessionId: session.sessionId,
+            cwd: session.cwd
+        )
+
+        history = ChatHistoryManager.shared.history(for: logicalSessionId)
+        withAnimation(.easeOut(duration: 0.2)) {
+            isLoading = false
+        }
+    }
+
+    @MainActor
+    private func attemptSendMessage(_ text: String) async {
+        isSending = true
+        let success = await sendToSession(text)
+        isSending = false
+
+        guard success else {
+            showSendFailure("Session is still initializing. Please try again.")
+            return
+        }
 
         inputText = ""
-
-        // Resume autoscroll when user sends a message
+        sendFailureMessage = nil
         resumeAutoscroll()
         shouldScrollToBottom = true
-
-        // Don't add to history here - it will be synced from JSONL when UserPromptSubmit event fires
-        Task {
-            await sendToSession(text)
-        }
     }
 
-    private func sendToSession(_ text: String) async {
-        guard session.isInTmux else { return }
-        guard let tty = session.tty else { return }
-
-        if let target = await findTmuxTarget(tty: tty) {
-            _ = await ToolApprovalHandler.shared.sendMessage(text, to: target)
+    private func sendToSession(_ text: String) async -> Bool {
+        guard let latestSession = latestSession(),
+              latestSession.isInTmux,
+              let tty = latestSession.tty,
+              let target = await TmuxController.shared.findTmuxTarget(forTTY: tty) else {
+            return false
         }
+
+        return await ToolApprovalHandler.shared.sendMessage(text, to: target)
     }
 
-    private func findTmuxTarget(tty: String) async -> TmuxTarget? {
-        guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else {
-            return nil
-        }
+    private func latestSession() -> SessionState? {
+        sessionMonitor.instances.first(where: { $0.logicalSessionId == logicalSessionId }) ?? session
+    }
 
-        do {
-            let output = try await ProcessExecutor.shared.run(
-                tmuxPath,
-                arguments: ["list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index} #{pane_tty}"]
-            )
+    private func showSendFailure(_ message: String) {
+        sendFailureMessage = message
 
-            let lines = output.components(separatedBy: "\n")
-            for line in lines {
-                let parts = line.components(separatedBy: " ")
-                guard parts.count >= 2 else { continue }
-
-                let target = parts[0]
-                let paneTty = parts[1].replacingOccurrences(of: "/dev/", with: "")
-
-                if paneTty == tty {
-                    return TmuxTarget(from: target)
-                }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            if sendFailureMessage == message {
+                sendFailureMessage = nil
             }
-        } catch {
-            return nil
         }
-
-        return nil
     }
 }
 

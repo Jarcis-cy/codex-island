@@ -8,12 +8,18 @@ import Foundation
 
 @MainActor
 class ChatHistoryManager: ObservableObject {
+    private struct LoadingSource: Hashable {
+        let logicalSessionId: String
+        let sessionId: String
+    }
+
     static let shared = ChatHistoryManager()
 
     @Published private(set) var histories: [String: [ChatHistoryItem]] = [:]
     @Published private(set) var agentDescriptions: [String: [String: String]] = [:]
 
-    private var loadedSessions: Set<String> = []
+    private var loadedSessions: [String: String] = [:]
+    private var loadingSessions: Set<LoadingSource> = []
     private var cancellables = Set<AnyCancellable>()
 
     private init() {
@@ -31,14 +37,20 @@ class ChatHistoryManager: ObservableObject {
         histories[logicalSessionId] ?? []
     }
 
-    func isLoaded(logicalSessionId: String) -> Bool {
-        loadedSessions.contains(logicalSessionId)
+    func isLoaded(logicalSessionId: String, sessionId: String) -> Bool {
+        loadedSessions[logicalSessionId] == sessionId
     }
 
     func loadFromFile(logicalSessionId: String, sessionId: String, cwd: String) async {
-        guard !loadedSessions.contains(logicalSessionId) else { return }
-        loadedSessions.insert(logicalSessionId)
+        let source = LoadingSource(logicalSessionId: logicalSessionId, sessionId: sessionId)
+        guard loadedSessions[logicalSessionId] != sessionId,
+              !loadingSessions.contains(source) else { return }
+
+        loadingSessions.insert(source)
+        defer { loadingSessions.remove(source) }
+
         await SessionStore.shared.process(.loadHistory(sessionId: sessionId, cwd: cwd))
+        loadedSessions[logicalSessionId] = sessionId
     }
 
     func syncFromFile(sessionId: String, cwd: String) async {
@@ -66,7 +78,8 @@ class ChatHistoryManager: ObservableObject {
     }
 
     func clearHistory(for logicalSessionId: String, sessionId: String?) {
-        loadedSessions.remove(logicalSessionId)
+        loadedSessions.removeValue(forKey: logicalSessionId)
+        loadingSessions = loadingSessions.filter { $0.logicalSessionId != logicalSessionId }
         histories.removeValue(forKey: logicalSessionId)
         Task {
             if let sessionId {
@@ -75,16 +88,29 @@ class ChatHistoryManager: ObservableObject {
         }
     }
 
+    func resetForTesting() {
+        histories = [:]
+        agentDescriptions = [:]
+        loadedSessions = [:]
+        loadingSessions = []
+    }
+
     // MARK: - State Updates
 
     private func updateFromSessions(_ sessions: [SessionState]) {
         var newHistories: [String: [ChatHistoryItem]] = [:]
         var newAgentDescriptions: [String: [String: String]] = [:]
+        let activeLogicalIds = Set(sessions.map(\.logicalSessionId))
+        loadedSessions = loadedSessions.filter { activeLogicalIds.contains($0.key) }
+        loadingSessions = loadingSessions.filter { activeLogicalIds.contains($0.logicalSessionId) }
+
         for session in sessions {
             let filteredItems = filterOutSubagentTools(session.chatItems)
             newHistories[session.logicalSessionId] = filteredItems
             newAgentDescriptions[session.logicalSessionId] = session.subagentState.agentDescriptions
-            loadedSessions.insert(session.logicalSessionId)
+            if !filteredItems.isEmpty {
+                loadedSessions[session.logicalSessionId] = session.sessionId
+            }
         }
         histories = newHistories
         agentDescriptions = newAgentDescriptions
