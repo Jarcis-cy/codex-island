@@ -99,4 +99,16 @@ actor SessionTranscriptParser {
             )
         }
     }
+
+    func transcriptPhase(session: SessionState) async -> SessionPhase? {
+        switch session.provider {
+        case .claude:
+            return nil
+        case .codex:
+            return await CodexConversationParser.shared.transcriptPhase(
+                sessionId: session.sessionId,
+                transcriptPath: session.transcriptPath
+            )
+        }
+    }
 }

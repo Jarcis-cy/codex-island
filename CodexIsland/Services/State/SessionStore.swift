@@ -66,6 +66,9 @@ actor SessionStore {
         case .permissionSocketFailed(let sessionId, let toolUseId):
             await processSocketFailure(sessionId: sessionId, toolUseId: toolUseId)
 
+        case .codexProcessExited(let sessionId):
+            await processCodexProcessExited(sessionId: sessionId)
+
         case .fileUpdated(let payload):
             await processFileUpdate(payload)
 
@@ -81,7 +84,7 @@ actor SessionStore {
         case .loadHistory(let sessionId, let cwd):
             await loadHistoryFromFile(sessionId: sessionId, cwd: cwd)
 
-        case .historyLoaded(let sessionId, let messages, let completedTools, let toolResults, let structuredResults, let pendingInteractions, let conversationInfo):
+        case .historyLoaded(let sessionId, let messages, let completedTools, let toolResults, let structuredResults, let pendingInteractions, let transcriptPhase, let conversationInfo):
             await processHistoryLoaded(
                 sessionId: sessionId,
                 messages: messages,
@@ -89,6 +92,7 @@ actor SessionStore {
                 toolResults: toolResults,
                 structuredResults: structuredResults,
                 pendingInteractions: pendingInteractions,
+                transcriptPhase: transcriptPhase,
                 conversationInfo: conversationInfo
             )
 
@@ -703,6 +707,9 @@ actor SessionStore {
         let conversationInfo = await SessionTranscriptParser.shared.parse(session: session)
         session.conversationInfo = conversationInfo
         session.pendingInteractions = payload.pendingInteractions
+        if session.provider == .codex, let transcriptPhase = payload.transcriptPhase {
+            session.phase = transcriptPhase
+        }
 
         // Handle /clear reconciliation - remove items that no longer exist in parser state
         if session.needsClearReconciliation {
@@ -1046,6 +1053,16 @@ actor SessionStore {
         Self.logger.info("/clear processed for session \(sessionId.prefix(8), privacy: .public) - marked for reconciliation")
     }
 
+    private func processCodexProcessExited(sessionId: String) async {
+        guard var session = sessions[sessionId], session.provider == .codex else { return }
+
+        session.pendingInteractions.removeAll()
+        if session.phase != .ended {
+            session.phase = .idle
+        }
+        sessions[sessionId] = session
+    }
+
     // MARK: - Session End Processing
 
     private func processSessionEnd(sessionId: String) async {
@@ -1062,6 +1079,7 @@ actor SessionStore {
         let toolResults = await SessionTranscriptParser.shared.toolResults(session: session)
         let structuredResults = await SessionTranscriptParser.shared.structuredResults(session: session)
         let pendingInteractions = await SessionTranscriptParser.shared.pendingInteractions(session: session)
+        let transcriptPhase = await SessionTranscriptParser.shared.transcriptPhase(session: session)
 
         // Also parse conversationInfo (summary, lastMessage, etc.)
         let conversationInfo = await SessionTranscriptParser.shared.parse(session: session)
@@ -1074,6 +1092,7 @@ actor SessionStore {
             toolResults: toolResults,
             structuredResults: structuredResults,
             pendingInteractions: pendingInteractions,
+            transcriptPhase: transcriptPhase,
             conversationInfo: conversationInfo
         ))
     }
@@ -1085,6 +1104,7 @@ actor SessionStore {
         toolResults: [String: ConversationParser.ToolResult],
         structuredResults: [String: ToolResultData],
         pendingInteractions: [PendingInteraction],
+        transcriptPhase: SessionPhase?,
         conversationInfo: ConversationInfo
     ) async {
         guard var session = sessions[sessionId] else { return }
@@ -1092,6 +1112,9 @@ actor SessionStore {
         // Update conversationInfo (summary, lastMessage, etc.)
         session.conversationInfo = conversationInfo
         session.pendingInteractions = pendingInteractions
+        if session.provider == .codex, let transcriptPhase {
+            session.phase = transcriptPhase
+        }
 
         // Convert messages to chat items
         let existingIds = Set(session.chatItems.map { $0.id })
@@ -1153,7 +1176,8 @@ actor SessionStore {
                 completedToolIds: result.completedToolIds,
                 toolResults: result.toolResults,
                 structuredResults: result.structuredResults,
-                pendingInteractions: result.pendingInteractions
+                pendingInteractions: result.pendingInteractions,
+                transcriptPhase: result.transcriptPhase
             )
 
             await self.process(.fileUpdated(payload))

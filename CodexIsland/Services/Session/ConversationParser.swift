@@ -284,6 +284,7 @@ actor ConversationParser {
         let toolResults: [String: ToolResult]
         let structuredResults: [String: ToolResultData]
         let pendingInteractions: [PendingInteraction]
+        let transcriptPhase: SessionPhase?
         let clearDetected: Bool
     }
 
@@ -299,6 +300,7 @@ actor ConversationParser {
                 toolResults: [:],
                 structuredResults: [:],
                 pendingInteractions: [],
+                transcriptPhase: nil,
                 clearDetected: false
             )
         }
@@ -318,6 +320,7 @@ actor ConversationParser {
             toolResults: state.toolResults,
             structuredResults: state.structuredResults,
             pendingInteractions: [],
+            transcriptPhase: nil,
             clearDetected: clearDetected
         )
     }

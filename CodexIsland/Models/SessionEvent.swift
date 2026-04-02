@@ -27,6 +27,9 @@ enum SessionEvent: Sendable {
     /// Permission socket failed (connection died before response)
     case permissionSocketFailed(sessionId: String, toolUseId: String)
 
+    /// Local Codex process exited without a final hook to clear active state
+    case codexProcessExited(sessionId: String)
+
     // MARK: - File Events (from ConversationParser)
 
     /// JSONL file was updated with new content
@@ -74,7 +77,7 @@ enum SessionEvent: Sendable {
     case loadHistory(sessionId: String, cwd: String)
 
     /// History load completed
-    case historyLoaded(sessionId: String, messages: [ChatMessage], completedTools: Set<String>, toolResults: [String: ConversationParser.ToolResult], structuredResults: [String: ToolResultData], pendingInteractions: [PendingInteraction], conversationInfo: ConversationInfo)
+    case historyLoaded(sessionId: String, messages: [ChatMessage], completedTools: Set<String>, toolResults: [String: ConversationParser.ToolResult], structuredResults: [String: ToolResultData], pendingInteractions: [PendingInteraction], transcriptPhase: SessionPhase?, conversationInfo: ConversationInfo)
 }
 
 /// Payload for file update events
@@ -90,6 +93,7 @@ struct FileUpdatePayload: Sendable {
     let toolResults: [String: ConversationParser.ToolResult]
     let structuredResults: [String: ToolResultData]
     let pendingInteractions: [PendingInteraction]
+    let transcriptPhase: SessionPhase?
 }
 
 /// Result of a tool completion detected from JSONL
@@ -192,6 +196,8 @@ extension SessionEvent: CustomStringConvertible {
             return "permissionDenied(session: \(sessionId.prefix(8)), tool: \(toolUseId.prefix(12)))"
         case .permissionSocketFailed(let sessionId, let toolUseId):
             return "permissionSocketFailed(session: \(sessionId.prefix(8)), tool: \(toolUseId.prefix(12)))"
+        case .codexProcessExited(let sessionId):
+            return "codexProcessExited(session: \(sessionId.prefix(8)))"
         case .fileUpdated(let payload):
             return "fileUpdated(session: \(payload.sessionId.prefix(8)), messages: \(payload.messages.count))"
         case .interruptDetected(let sessionId):
@@ -202,7 +208,7 @@ extension SessionEvent: CustomStringConvertible {
             return "sessionEnded(session: \(sessionId.prefix(8)))"
         case .loadHistory(let sessionId, _):
             return "loadHistory(session: \(sessionId.prefix(8)))"
-        case .historyLoaded(let sessionId, let messages, _, _, _, _, _):
+        case .historyLoaded(let sessionId, let messages, _, _, _, _, _, _):
             return "historyLoaded(session: \(sessionId.prefix(8)), messages: \(messages.count))"
         case .toolCompleted(let sessionId, let toolUseId, let result):
             return "toolCompleted(session: \(sessionId.prefix(8)), tool: \(toolUseId.prefix(12)), status: \(result.status))"

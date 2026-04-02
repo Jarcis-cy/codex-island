@@ -18,6 +18,7 @@ actor CodexConversationParser {
         let toolResults: [String: ConversationParser.ToolResult]
         let structuredResults: [String: ToolResultData]
         let pendingInteractions: [PendingInteraction]
+        let transcriptPhase: SessionPhase?
         let conversationInfo: ConversationInfo
     }
 
@@ -54,6 +55,7 @@ actor CodexConversationParser {
                 toolResults: [:],
                 structuredResults: [:],
                 pendingInteractions: [],
+                transcriptPhase: nil,
                 clearDetected: false
             )
         }
@@ -77,6 +79,7 @@ actor CodexConversationParser {
             toolResults: snapshot.toolResults,
             structuredResults: snapshot.structuredResults,
             pendingInteractions: snapshot.pendingInteractions,
+            transcriptPhase: snapshot.transcriptPhase,
             clearDetected: false
         )
     }
@@ -95,6 +98,10 @@ actor CodexConversationParser {
 
     func pendingInteractions(sessionId: String, transcriptPath: String?) -> [PendingInteraction] {
         loadSnapshot(sessionId: sessionId, transcriptPath: transcriptPath)?.pendingInteractions ?? []
+    }
+
+    func transcriptPhase(sessionId: String, transcriptPath: String?) -> SessionPhase? {
+        loadSnapshot(sessionId: sessionId, transcriptPath: transcriptPath)?.transcriptPhase
     }
 
     private func loadSnapshot(sessionId: String, transcriptPath: String?) -> Snapshot? {
@@ -130,6 +137,7 @@ actor CodexConversationParser {
                 toolResults: [:],
                 structuredResults: [:],
                 pendingInteractions: [],
+                transcriptPhase: nil,
                 conversationInfo: ConversationInfo(
                     summary: nil,
                     lastMessage: nil,
@@ -146,6 +154,7 @@ actor CodexConversationParser {
         var toolResults: [String: ConversationParser.ToolResult] = [:]
         var pendingInteractionOrder: [String] = []
         var pendingInteractions: [String: PendingInteraction] = [:]
+        var transcriptPhase: SessionPhase?
 
         let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
         for (lineIndex, line) in lines.enumerated() {
@@ -168,7 +177,8 @@ actor CodexConversationParser {
                     completedToolIds: &completedToolIds,
                     toolResults: &toolResults,
                     pendingInteractionOrder: &pendingInteractionOrder,
-                    pendingInteractions: &pendingInteractions
+                    pendingInteractions: &pendingInteractions,
+                    transcriptPhase: &transcriptPhase
                 )
             case "event_msg":
                 guard let payload = json["payload"] as? [String: Any],
@@ -182,7 +192,8 @@ actor CodexConversationParser {
                     completedToolIds: &completedToolIds,
                     toolResults: &toolResults,
                     pendingInteractionOrder: &pendingInteractionOrder,
-                    pendingInteractions: &pendingInteractions
+                    pendingInteractions: &pendingInteractions,
+                    transcriptPhase: &transcriptPhase
                 )
             default:
                 continue
@@ -204,6 +215,10 @@ actor CodexConversationParser {
             toolResults: toolResults,
             structuredResults: [:],
             pendingInteractions: orderedPendingInteractions,
+            transcriptPhase: finalizeTranscriptPhase(
+                transcriptPhase,
+                pendingInteractions: orderedPendingInteractions
+            ),
             conversationInfo: conversationInfo
         )
     }
@@ -216,7 +231,8 @@ actor CodexConversationParser {
         completedToolIds: inout Set<String>,
         toolResults: inout [String: ConversationParser.ToolResult],
         pendingInteractionOrder: inout [String],
-        pendingInteractions: inout [String: PendingInteraction]
+        pendingInteractions: inout [String: PendingInteraction],
+        transcriptPhase: inout SessionPhase?
     ) {
         guard let payloadType = payload["type"] as? String else { return }
 
@@ -251,6 +267,7 @@ actor CodexConversationParser {
         case "local_shell_call":
             let callId = (payload["call_id"] as? String) ?? "local-shell-\(lineIndex)"
             let command = parseLocalShellCommand(payload)
+            transcriptPhase = .processing
             messages.append(ChatMessage(
                 id: "codex-tool-\(callId)",
                 role: .assistant,
@@ -262,6 +279,7 @@ actor CodexConversationParser {
             guard let callId = payload["call_id"] as? String else { return }
             let name = payload["name"] as? String ?? "Tool"
             let arguments = payload["arguments"] as? String
+            transcriptPhase = .processing
             messages.append(ChatMessage(
                 id: "codex-tool-\(callId)",
                 role: .assistant,
@@ -283,6 +301,7 @@ actor CodexConversationParser {
             guard let callId = payload["call_id"] as? String else { return }
             let name = payload["name"] as? String ?? "CustomTool"
             let input = payload["input"] as? String ?? ""
+            transcriptPhase = .processing
             messages.append(ChatMessage(
                 id: "codex-tool-\(callId)",
                 role: .assistant,
@@ -292,6 +311,7 @@ actor CodexConversationParser {
 
         case "tool_search_call":
             let callId = (payload["call_id"] as? String) ?? "tool-search-\(lineIndex)"
+            transcriptPhase = .processing
             messages.append(ChatMessage(
                 id: "codex-tool-\(callId)",
                 role: .assistant,
@@ -301,6 +321,7 @@ actor CodexConversationParser {
 
         case "web_search_call":
             let callId = (payload["id"] as? String) ?? "web-search-\(lineIndex)"
+            transcriptPhase = .processing
             messages.append(ChatMessage(
                 id: "codex-tool-\(callId)",
                 role: .assistant,
@@ -319,6 +340,7 @@ actor CodexConversationParser {
 
         case "image_generation_call":
             let callId = (payload["id"] as? String) ?? "image-generation-\(lineIndex)"
+            transcriptPhase = .processing
             messages.append(ChatMessage(
                 id: "codex-tool-\(callId)",
                 role: .assistant,
@@ -383,7 +405,8 @@ actor CodexConversationParser {
         completedToolIds: inout Set<String>,
         toolResults: inout [String: ConversationParser.ToolResult],
         pendingInteractionOrder: inout [String],
-        pendingInteractions: inout [String: PendingInteraction]
+        pendingInteractions: inout [String: PendingInteraction],
+        transcriptPhase: inout SessionPhase?
     ) {
         switch eventType {
         case "exec_command_end":
@@ -407,6 +430,12 @@ actor CodexConversationParser {
                     pendingInteractionOrder.append(interaction.id)
                 }
             }
+            transcriptPhase = .waitingForApproval(PermissionContext(
+                toolUseId: payload["call_id"] as? String ?? "request_permissions",
+                toolName: "Permissions Request",
+                toolInput: nil,
+                receivedAt: Date()
+            ))
 
         case "exec_approval_request":
             if let interaction = parseExecApprovalEvent(payload: payload) {
@@ -414,15 +443,45 @@ actor CodexConversationParser {
                 if !pendingInteractionOrder.contains(interaction.id) {
                     pendingInteractionOrder.append(interaction.id)
                 }
+                transcriptPhase = .waitingForApproval(PermissionContext(
+                    toolUseId: interaction.id,
+                    toolName: "Command Execution",
+                    toolInput: nil,
+                    receivedAt: Date()
+                ))
             }
+
+        case "request_user_input":
+            transcriptPhase = .waitingForInput
 
         case "turn_complete", "task_complete", "turn_aborted":
             pendingInteractions.removeAll()
             pendingInteractionOrder.removeAll()
+            transcriptPhase = .waitingForInput
 
         default:
             break
         }
+    }
+
+    private func finalizeTranscriptPhase(
+        _ phase: SessionPhase?,
+        pendingInteractions: [PendingInteraction]
+    ) -> SessionPhase? {
+        if let pending = pendingInteractions.last {
+            switch pending {
+            case .approval(let approval):
+                return .waitingForApproval(PermissionContext(
+                    toolUseId: approval.id,
+                    toolName: approval.title,
+                    toolInput: nil,
+                    receivedAt: Date()
+                ))
+            case .userInput:
+                return .waitingForInput
+            }
+        }
+        return phase
     }
 
     private func buildConversationInfo(

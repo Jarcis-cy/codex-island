@@ -16,6 +16,7 @@ class CodexSessionMonitor: ObservableObject {
     @Published var pendingInstances: [SessionState] = []
 
     private var cancellables = Set<AnyCancellable>()
+    private var codexLivenessTask: Task<Void, Never>?
 
     init() {
         SessionStore.shared.sessionsPublisher
@@ -26,6 +27,7 @@ class CodexSessionMonitor: ObservableObject {
             .store(in: &cancellables)
 
         InterruptWatcherManager.shared.delegate = self
+        CodexTranscriptWatcherManager.shared.delegate = self
     }
 
     // MARK: - Monitoring Lifecycle
@@ -52,6 +54,23 @@ class CodexSessionMonitor: ObservableObject {
                     }
                 }
 
+                if event.provider == .codex,
+                   let transcriptPath = event.transcriptPath,
+                   !transcriptPath.isEmpty {
+                    Task { @MainActor in
+                        CodexTranscriptWatcherManager.shared.startWatching(
+                            sessionId: event.sessionId,
+                            transcriptPath: transcriptPath
+                        )
+                    }
+                }
+
+                if event.provider == .codex && event.status == "ended" {
+                    Task { @MainActor in
+                        CodexTranscriptWatcherManager.shared.stopWatching(sessionId: event.sessionId)
+                    }
+                }
+
                 if event.event == "Stop" {
                     HookSocketServer.shared.cancelPendingPermissions(sessionId: event.sessionId)
                 }
@@ -68,10 +87,18 @@ class CodexSessionMonitor: ObservableObject {
                 }
             }
         )
+
+        codexLivenessTask?.cancel()
+        codexLivenessTask = Task { [weak self] in
+            await self?.monitorCodexProcessLiveness()
+        }
     }
 
     func stopMonitoring() {
         HookSocketServer.shared.stop()
+        CodexTranscriptWatcherManager.shared.stopAll()
+        codexLivenessTask?.cancel()
+        codexLivenessTask = nil
     }
 
     // MARK: - Permission Handling
@@ -180,6 +207,7 @@ class CodexSessionMonitor: ObservableObject {
         let removedSessionIds = previousSessionIds.subtracting(currentSessionIds)
         for sessionId in removedSessionIds {
             InterruptWatcherManager.shared.stopWatching(sessionId: sessionId)
+            CodexTranscriptWatcherManager.shared.stopWatching(sessionId: sessionId)
         }
 
         instances = sessions
@@ -198,6 +226,32 @@ class CodexSessionMonitor: ObservableObject {
     private func refreshSessionAfterInteraction(_ session: SessionState) async {
         try? await Task.sleep(for: .milliseconds(250))
         await SessionStore.shared.process(.loadHistory(sessionId: session.sessionId, cwd: session.cwd))
+    }
+
+    private func monitorCodexProcessLiveness() async {
+        while !Task.isCancelled {
+            let sessions = await SessionStore.shared.allSessions()
+            for session in sessions where session.provider == .codex && (session.phase.isActive || session.needsAttention) {
+                guard let pid = session.pid else { continue }
+                if !processExists(pid: pid) {
+                    await ChatHistoryManager.shared.syncFromFile(sessionId: session.sessionId, cwd: session.cwd)
+                    await SessionStore.shared.process(.codexProcessExited(sessionId: session.sessionId))
+                }
+            }
+
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private nonisolated func processExists(pid: Int) -> Bool {
+        if kill(pid_t(pid), 0) == 0 {
+            return true
+        }
+        return errno != ESRCH
     }
 
     private func localApprovalSteps(
@@ -284,6 +338,15 @@ extension CodexSessionMonitor: JSONLInterruptWatcherDelegate {
 
         Task { @MainActor in
             InterruptWatcherManager.shared.stopWatching(sessionId: sessionId)
+        }
+    }
+}
+
+extension CodexSessionMonitor: CodexTranscriptWatcherDelegate {
+    nonisolated func didUpdateCodexTranscript(sessionId: String) {
+        Task { @MainActor in
+            guard let session = await SessionStore.shared.session(for: sessionId) else { return }
+            await ChatHistoryManager.shared.syncFromFile(sessionId: sessionId, cwd: session.cwd)
         }
     }
 }
