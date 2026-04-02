@@ -15,7 +15,7 @@ enum NotchStatus: Equatable {
     case popping
 }
 
-enum NotchOpenReason {
+enum NotchOpenReason: Equatable {
     case click
     case hover
     case notification
@@ -108,18 +108,29 @@ class NotchViewModel: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private let events = EventMonitors.shared
-    private var hoverTimer: DispatchWorkItem?
+    private let hoverCloseDelay: TimeInterval
+    private var hoverCloseWorkItem: DispatchWorkItem?
 
     // MARK: - Initialization
 
-    init(deviceNotchRect: CGRect, screenRect: CGRect, windowHeight: CGFloat, hasPhysicalNotch: Bool) {
+    init(
+        deviceNotchRect: CGRect,
+        screenRect: CGRect,
+        windowHeight: CGFloat,
+        hasPhysicalNotch: Bool,
+        hoverCloseDelay: TimeInterval = 2.0,
+        monitorEvents: Bool = true
+    ) {
         self.geometry = NotchGeometry(
             deviceNotchRect: deviceNotchRect,
             screenRect: screenRect,
             windowHeight: windowHeight
         )
         self.hasPhysicalNotch = hasPhysicalNotch
-        setupEventHandlers()
+        self.hoverCloseDelay = hoverCloseDelay
+        if monitorEvents {
+            setupEventHandlers()
+        }
         observeSelectors()
     }
 
@@ -165,31 +176,29 @@ class NotchViewModel: ObservableObject {
     private func handleMouseMove(_ location: CGPoint) {
         let inNotch = geometry.isPointInNotch(location)
         let inOpened = status == .opened && geometry.isPointInOpenedPanel(location, size: openedSize)
+        setHovering(inNotch || inOpened)
+    }
 
-        let newHovering = inNotch || inOpened
-
+    func setHovering(_ hovering: Bool) {
         // Only update if changed to prevent unnecessary re-renders
-        guard newHovering != isHovering else { return }
+        guard hovering != isHovering else { return }
 
-        isHovering = newHovering
+        isHovering = hovering
 
-        // Cancel any pending hover timer
-        hoverTimer?.cancel()
-        hoverTimer = nil
-
-        // Start hover timer to auto-expand after 1 second
-        if isHovering && (status == .closed || status == .popping) {
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self = self, self.isHovering else { return }
-                self.notchOpen(reason: .hover)
+        if hovering {
+            cancelScheduledHoverClose()
+            if status == .closed || status == .popping {
+                notchOpen(reason: .hover)
             }
-            hoverTimer = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: workItem)
+            return
         }
+
+        scheduleHoverCloseIfNeeded()
     }
 
     private func handleMouseDown() {
         let location = NSEvent.mouseLocation
+        cancelScheduledHoverClose()
 
         switch status {
         case .opened:
@@ -208,9 +217,29 @@ class NotchViewModel: ObservableObject {
         }
     }
 
+    private func scheduleHoverCloseIfNeeded() {
+        guard status == .opened, openReason == .hover else { return }
+
+        cancelScheduledHoverClose()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            guard self.status == .opened, self.openReason == .hover, !self.isHovering else { return }
+            self.notchClose()
+        }
+        hoverCloseWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + hoverCloseDelay, execute: workItem)
+    }
+
+    private func cancelScheduledHoverClose() {
+        hoverCloseWorkItem?.cancel()
+        hoverCloseWorkItem = nil
+    }
+
     // MARK: - Actions
 
     func notchOpen(reason: NotchOpenReason = .unknown) {
+        cancelScheduledHoverClose()
         openReason = reason
         status = .opened
 
@@ -239,6 +268,7 @@ class NotchViewModel: ObservableObject {
     }
 
     func notchClose() {
+        cancelScheduledHoverClose()
         // Save chat session before closing if in chat mode
         if case .chat(let session) = contentType {
             currentChatSession = session
