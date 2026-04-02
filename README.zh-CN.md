@@ -11,15 +11,17 @@
   </p>
 </div>
 
-Codex Island 用来盯住本地运行中的 Codex 会话，并把状态变化放到 macOS 的 Dynamic Island 风格浮层里。它适合长期把 Codex 跑在终端里的用户，让你不用一直盯着终端窗口，也能及时看到状态、审批请求和最近上下文。
+Codex Island 用来盯住本地运行中的 Codex 会话，也可以通过 SSH 连接远端机器上的 Codex，并把状态变化放到 macOS 的 Dynamic Island 风格浮层里。它适合长期把 Codex 跑在终端里的用户，让你不用一直盯着每个 shell 窗口，也能及时看到状态、审批请求和最近上下文。
 
 ## 功能概览
 
 - 通过 `~/.codex/hooks.json` 和本地 Unix Socket 监听 Codex 会话。
+- 通过 SSH 连接远端机器，并通过 stdio 和 `codex app-server` 通信。
 - 从刘海区域展开，展示会话状态、等待输入、工具执行等信息。
 - 内置最近对话历史查看，并支持 Markdown 渲染。
 - 可直接在应用界面里处理审批流。
-- 支持同时跟踪多个会话，并在会话之间切换。
+- 支持同时跟踪多个本地会话和远端 threads，并在它们之间切换。
+- 可在应用内保存 SSH Target、可选默认工作目录和远端主机自动连接设置。
 - 提供开机启动、屏幕选择、提示音、应用内更新等能力。
 - 在没有实体刘海的 Mac 上也能正常工作。
 
@@ -27,6 +29,7 @@ Codex Island 用来盯住本地运行中的 Codex 会话，并把状态变化放
 
 - macOS 15.6 或更高版本
 - 本地已安装 Codex CLI
+- 如果要管理远端主机，需要具备对应机器的 SSH 访问能力，且远端机器已安装 Codex CLI
 - 如果需要窗口聚焦相关能力，需要授予辅助功能权限
 - 如果要使用基于 tmux 的消息发送和审批流程，需要安装 `tmux`
 - 如果要使用窗口聚焦集成，需要安装 `yabai`
@@ -49,9 +52,25 @@ xcodebuild -scheme CodexIsland -configuration Debug build
 
 导出的应用位于 `build/export/Codex Island.app`。
 
+## SSH 远端主机
+
+可以从刘海菜单里的 `Remote Hosts` 入口添加 SSH Target、可选默认工作目录，以及每台远端主机是否自动连接。
+
+连接远端主机时，Codex Island 实际执行的是：
+
+```bash
+ssh -T -o BatchMode=yes <target> codex app-server --listen stdio://
+```
+
+这意味着当前远端能力依赖非交互式 SSH 认证，且远端机器必须已经能在 `PATH` 上找到 `codex`。连接后，应用可以直接列出远端线程、新建线程、打开已有线程、发送消息、中断 turn，并在 UI 里处理审批。
+
+远端 app-server 的诊断日志会写入 `~/Library/Application Support/Codex Island/Logs/remote-app-server.jsonl`。
+
 ## 工作原理
 
-首次启动时，Codex Island 会把受管的 hook 脚本安装到 `~/.codex/hooks/`，并更新 `~/.codex/hooks.json`。hook 脚本会把 Codex 的事件通过 Unix Domain Socket 转发给应用，应用再结合 transcript 信息做状态对账，以保持会话展示尽量准确。
+首次启动时，Codex Island 会把受管的 hook 脚本安装到 `~/.codex/hooks/`，并更新 `~/.codex/hooks.json`。hook 脚本会把本地 Codex 的事件通过 Unix Domain Socket 转发给应用，应用再结合 transcript 信息做状态对账，以保持会话展示尽量准确。
+
+远端主机走的是另一条链路：应用会通过 SSH stdio 连接到目标机器上的 `codex app-server`，并把远端 thread 状态与本地 hooks-first 会话一起呈现出来。
 
 当前实现仍然是以 macOS 进程内的 hooks 流程为主。仓库里的 `sidecar/` 目录是预留给后续 Rust sidecar 的脚手架，计划承接 transcript 解析、状态聚合和本地 IPC 等职责。
 
@@ -59,7 +78,7 @@ xcodebuild -scheme CodexIsland -configuration Debug build
 
 - `CodexIsland/App/`：应用生命周期和窗口启动
 - `CodexIsland/Core/`：设置、几何计算、屏幕选择等基础能力
-- `CodexIsland/Services/`：hooks、会话解析、tmux 集成、更新、窗口管理
+- `CodexIsland/Services/`：hooks、本机会话解析、远端 app-server 管理、tmux 集成、更新、窗口管理
 - `CodexIsland/UI/`：刘海视图、菜单界面、聊天界面和复用组件
 - `CodexIsland/Resources/`：随应用分发的脚本资源，例如 `codex-island-state.py`
 - `scripts/`：构建、签名、公证、发布辅助脚本
