@@ -12,10 +12,14 @@ import os
 import socket
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 SOCKET_PATH = "/tmp/codex-island.sock"
 DEBUG_LOG_PATH = os.path.expanduser("~/.codex/hooks/codex-island-debug.jsonl")
+
+
+def utc_timestamp():
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def append_debug(record):
@@ -52,17 +56,28 @@ def get_tty():
     return None
 
 
-def get_terminal_context(terminal_name):
+def get_terminal_context(terminal_name, cwd):
     normalized = (terminal_name or "").lower()
     if normalized != "ghostty":
-        return {}
+        return {}, {"strategy": "unsupported_terminal"}
 
     script = """
 tell application "Ghostty"
-    set windowID to id of front window as text
-    set tabID to id of selected tab of front window as text
-    set terminalID to id of focused terminal of selected tab of front window as text
-    return windowID & "|" & tabID & "|" & terminalID
+    set outputLines to {}
+    repeat with w in every window
+        set windowID to id of w as text
+        repeat with t in every tab of w
+            set tabID to id of t as text
+            set terminalRef to focused terminal of t
+            set terminalID to id of terminalRef as text
+            set terminalWD to working directory of terminalRef as text
+            set end of outputLines to windowID & (ASCII character 31) & tabID & (ASCII character 31) & terminalID & (ASCII character 31) & terminalWD
+        end repeat
+    end repeat
+    set AppleScript's text item delimiters to linefeed
+    set outputText to outputLines as text
+    set AppleScript's text item delimiters to ""
+    return outputText
 end tell
 """
 
@@ -74,20 +89,68 @@ end tell
             timeout=1,
         )
         if result.returncode != 0:
-            return {}
+            return {}, {"strategy": "ghostty_enumeration_failed", "error": result.stderr.strip() or result.stdout.strip()}
+    except Exception:
+        return {}, {"strategy": "ghostty_enumeration_exception"}
 
-        output = result.stdout.strip()
-        parts = output.split("|")
-        if len(parts) != 3:
-            return {}
+    normalized_cwd = normalize_path(cwd)
+    candidates = []
 
-        return {
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        parts = line.split("\x1f")
+        if len(parts) != 4:
+            continue
+
+        candidate = {
             "terminal_window_id": parts[0] or None,
             "terminal_tab_id": parts[1] or None,
             "terminal_surface_id": parts[2] or None,
+            "working_directory": parts[3] or None,
         }
-    except Exception:
-        return {}
+
+        if normalize_path(candidate["working_directory"]) == normalized_cwd:
+            candidates.append(candidate)
+
+    if len(candidates) == 1:
+        match = candidates[0]
+        return {
+            "terminal_window_id": match["terminal_window_id"],
+            "terminal_tab_id": match["terminal_tab_id"],
+            "terminal_surface_id": match["terminal_surface_id"],
+        }, {
+            "strategy": "ghostty_cwd_unique_match",
+            "match_count": 1,
+            "matched_working_directory": match["working_directory"],
+        }
+
+    if len(candidates) > 1:
+        return {}, {
+            "strategy": "ghostty_cwd_ambiguous",
+            "match_count": len(candidates),
+        }
+
+    return {}, {
+        "strategy": "ghostty_cwd_not_found",
+        "match_count": 0,
+    }
+
+
+def normalize_path(path):
+    if not path:
+        return None
+
+    trimmed = path.strip()
+    if not trimmed:
+        return None
+
+    try:
+        return os.path.realpath(trimmed)
+    except OSError:
+        return os.path.abspath(trimmed)
 
 
 def send_event(state):
@@ -100,7 +163,7 @@ def send_event(state):
         return True
     except OSError as error:
         append_debug({
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": utc_timestamp(),
             "stage": "socket_error",
             "error": str(error),
             "state": state,
@@ -147,6 +210,8 @@ def main():
     tool_name, tool_input = normalize_tool_input(payload)
     terminal_name = os.environ.get("TERM_PROGRAM") or os.environ.get("TERM")
 
+    terminal_context, terminal_context_debug = get_terminal_context(terminal_name, cwd)
+
     state = {
         "provider": "codex",
         "session_id": session_id,
@@ -158,7 +223,7 @@ def main():
         "tty": get_tty(),
         "terminal_name": terminal_name,
     }
-    state.update(get_terminal_context(terminal_name))
+    state.update(terminal_context)
 
     if event == "SessionStart":
         state["status"] = "waiting_for_input"
@@ -181,7 +246,7 @@ def main():
 
     sent = send_event(state)
     append_debug({
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": utc_timestamp(),
         "stage": "hook_received",
         "event": event,
         "sent": sent,
@@ -191,7 +256,8 @@ def main():
             "TERM_PROGRAM": os.environ.get("TERM_PROGRAM"),
             "TERM": os.environ.get("TERM"),
             "TMUX": os.environ.get("TMUX"),
-        }
+        },
+        "terminal_context_debug": terminal_context_debug,
     })
 
 

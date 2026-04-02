@@ -64,20 +64,99 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(Set(sessions.map(\.logicalSessionId)).count, 2)
     }
 
-    private func makeHookEvent(sessionId: String, tty: String?, pid: Int? = nil) -> HookEvent {
+    func testGhosttyMetadataCollisionFallsBackToTTY() async {
+        await SessionStore.shared.process(.hookReceived(
+            makeHookEvent(
+                sessionId: "session-1",
+                tty: "/dev/ttys001",
+                pid: 101,
+                cwd: "/tmp/project-a",
+                terminalName: "ghostty",
+                terminalWindowId: "tab-group-1",
+                terminalTabId: "tab-1",
+                terminalSurfaceId: "surface-1"
+            )
+        ))
+        await SessionStore.shared.process(.hookReceived(
+            makeHookEvent(
+                sessionId: "session-2",
+                tty: "/dev/ttys002",
+                pid: 202,
+                cwd: "/tmp/project-b",
+                terminalName: "ghostty",
+                terminalWindowId: "tab-group-1",
+                terminalTabId: "tab-1",
+                terminalSurfaceId: "surface-1"
+            )
+        ))
+
+        let sessions = await SessionStore.shared.allSessions()
+
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(Set(sessions.map(\.sessionId)), ["session-1", "session-2"])
+        XCTAssertEqual(
+            Set(sessions.map(\.logicalSessionId)),
+            ["local|ghostty|surface|surface-1", "local|ghostty|tty|ttys002"]
+        )
+    }
+
+    func testGhosttyMissingContextClearsStaleSurfaceIdentifiers() async {
+        await SessionStore.shared.process(.hookReceived(
+            makeHookEvent(
+                sessionId: "session-1",
+                tty: "/dev/ttys001",
+                pid: 101,
+                cwd: "/tmp/project-a",
+                terminalName: "ghostty",
+                terminalWindowId: "tab-group-1",
+                terminalTabId: "tab-1",
+                terminalSurfaceId: "surface-1"
+            )
+        ))
+        await SessionStore.shared.process(.hookReceived(
+            makeHookEvent(
+                sessionId: "session-1",
+                tty: "/dev/ttys001",
+                pid: 101,
+                cwd: "/tmp/project-a",
+                terminalName: "ghostty",
+                terminalWindowId: nil,
+                terminalTabId: nil,
+                terminalSurfaceId: nil
+            )
+        ))
+
+        let session = await SessionStore.shared.allSessions().first
+
+        XCTAssertEqual(session?.logicalSessionId, "local|ghostty|tty|ttys001")
+        XCTAssertNil(session?.terminalWindowId)
+        XCTAssertNil(session?.terminalTabId)
+        XCTAssertNil(session?.terminalSurfaceId)
+    }
+
+    private func makeHookEvent(
+        sessionId: String,
+        tty: String?,
+        pid: Int? = nil,
+        cwd: String = "/tmp/project",
+        terminalName: String = "Apple_Terminal",
+        terminalWindowId: String? = nil,
+        terminalTabId: String? = nil,
+        terminalSurfaceId: String? = nil
+    ) -> HookEvent {
         HookEvent(
             sessionId: sessionId,
             provider: .codex,
-            cwd: "/tmp/project",
+            cwd: cwd,
             transcriptPath: nil,
             event: "SessionStart",
             status: "waiting_for_input",
             pid: pid,
             tty: tty,
-            terminalName: "Apple_Terminal",
-            terminalWindowId: nil,
-            terminalTabId: nil,
-            terminalSurfaceId: nil,
+            terminalName: terminalName,
+            terminalWindowId: terminalWindowId,
+            terminalTabId: terminalTabId,
+            terminalSurfaceId: terminalSurfaceId,
             turnId: nil,
             tool: nil,
             toolInput: nil,

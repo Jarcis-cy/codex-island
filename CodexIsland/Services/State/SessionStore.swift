@@ -134,9 +134,7 @@ actor SessionStore {
         session.transcriptPath = event.transcriptPath ?? session.transcriptPath
         session.pid = event.pid
         session.terminalName = event.terminalName ?? session.terminalName
-        session.terminalWindowId = event.terminalWindowId ?? session.terminalWindowId
-        session.terminalTabId = event.terminalTabId ?? session.terminalTabId
-        session.terminalSurfaceId = event.terminalSurfaceId ?? session.terminalSurfaceId
+        updateTerminalContext(from: event, session: &session)
         if let pid = event.pid {
             let tree = ProcessTreeBuilder.shared.buildTree()
             session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
@@ -241,22 +239,53 @@ actor SessionStore {
         session.focusCapability = resolution.focusCapability
     }
 
+    private func updateTerminalContext(from event: HookEvent, session: inout SessionState) {
+        let isGhostty = isGhosttySession(terminalName: event.terminalName ?? session.terminalName, bundleId: session.terminalBundleId)
+
+        if isGhostty {
+            session.terminalWindowId = event.terminalWindowId
+            session.terminalTabId = event.terminalTabId
+            session.terminalSurfaceId = event.terminalSurfaceId
+            return
+        }
+
+        session.terminalWindowId = event.terminalWindowId ?? session.terminalWindowId
+        session.terminalTabId = event.terminalTabId ?? session.terminalTabId
+        session.terminalSurfaceId = event.terminalSurfaceId ?? session.terminalSurfaceId
+    }
+
     private func resolveLogicalSessionId(for session: SessionState) -> String {
         let appId = normalizedTerminalIdentity(for: session)
 
         if let surfaceId = normalizedComponent(session.terminalSurfaceId) {
-            return "local|\(appId)|surface|\(surfaceId)"
+            let candidate = "local|\(appId)|surface|\(surfaceId)"
+            if shouldFallbackFromTerminalMetadata(candidate: candidate, session: session) {
+                return fallbackLogicalSessionId(for: session, appId: appId)
+            }
+            return candidate
         }
 
         if let windowId = normalizedComponent(session.terminalWindowId),
            let tabId = normalizedComponent(session.terminalTabId) {
-            return "local|\(appId)|window-tab|\(windowId)|\(tabId)"
+            let candidate = "local|\(appId)|window-tab|\(windowId)|\(tabId)"
+            if shouldFallbackFromTerminalMetadata(candidate: candidate, session: session) {
+                return fallbackLogicalSessionId(for: session, appId: appId)
+            }
+            return candidate
         }
 
         if let windowId = normalizedComponent(session.terminalWindowId) {
-            return "local|\(appId)|window|\(windowId)"
+            let candidate = "local|\(appId)|window|\(windowId)"
+            if shouldFallbackFromTerminalMetadata(candidate: candidate, session: session) {
+                return fallbackLogicalSessionId(for: session, appId: appId)
+            }
+            return candidate
         }
 
+        return fallbackLogicalSessionId(for: session, appId: appId)
+    }
+
+    private func fallbackLogicalSessionId(for session: SessionState, appId: String) -> String {
         if let tty = normalizedComponent(session.tty) {
             return "local|\(appId)|tty|\(tty)"
         }
@@ -266,6 +295,24 @@ actor SessionStore {
         }
 
         return "local|fallback|\(session.sessionId)"
+    }
+
+    private func shouldFallbackFromTerminalMetadata(candidate: String, session: SessionState) -> Bool {
+        guard isGhosttySession(session),
+              let existingSessionId = logicalBindings[candidate],
+              existingSessionId != session.sessionId,
+              let existingSession = sessions[existingSessionId] else {
+            return false
+        }
+
+        if let existingTTY = normalizedComponent(existingSession.tty),
+           let currentTTY = normalizedComponent(session.tty) {
+            return existingTTY != currentTTY
+        }
+
+        let existingCwd = normalizedPathComponent(existingSession.cwd)
+        let currentCwd = normalizedPathComponent(session.cwd)
+        return existingCwd != nil && currentCwd != nil && existingCwd != currentCwd
     }
 
     private func normalizedTerminalIdentity(for session: SessionState) -> String {
@@ -286,6 +333,24 @@ actor SessionStore {
             return nil
         }
         return trimmed.lowercased()
+    }
+
+    private func normalizedPathComponent(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+
+        return URL(fileURLWithPath: trimmed).standardizedFileURL.path
+    }
+
+    private func isGhosttySession(_ session: SessionState) -> Bool {
+        isGhosttySession(terminalName: session.terminalName, bundleId: session.terminalBundleId)
+    }
+
+    private func isGhosttySession(terminalName: String?, bundleId: String?) -> Bool {
+        normalizedComponent(bundleId) == "com.mitchellh.ghostty" ||
+        normalizedComponent(terminalName) == "ghostty"
     }
 
     private func bind(session: inout SessionState) {
