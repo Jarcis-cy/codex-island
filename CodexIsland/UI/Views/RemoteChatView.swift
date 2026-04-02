@@ -125,6 +125,7 @@ struct RemoteChatView: View {
     @State private var slashFeedbackMessage: String?
     @State private var isSlashPanelLoading = false
     @State private var isExecutingSlashAction = false
+    @State private var isOpeningThread = false
     @State private var availableModels: [RemoteAppServerModel] = []
     @State private var selectedModelForEffort: RemoteAppServerModel?
     @State private var resumeCandidates: [RemoteThreadState] = []
@@ -158,11 +159,17 @@ struct RemoteChatView: View {
         thread.turnContext.collaborationMode?.mode == .plan
     }
 
+    private var shouldLoadThreadDetails: Bool {
+        !thread.isLoaded || thread.history.isEmpty
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
 
-            if history.isEmpty {
+            if isOpeningThread {
+                loadingState
+            } else if history.isEmpty {
                 emptyState
             } else {
                 messageList
@@ -188,18 +195,13 @@ struct RemoteChatView: View {
         }
         .task {
             remoteSessionMonitor.refreshHost(id: initialThread.hostId)
-            if !initialThread.isLoaded {
-                if let updated = try? await remoteSessionMonitor.openThread(
-                    hostId: initialThread.hostId,
-                    threadId: initialThread.threadId
-                ) {
-                    thread = updated
-                }
-            }
+            await openThreadIfNeeded()
         }
         .onReceive(remoteSessionMonitor.$threads) { threads in
             if let updated = threads.first(where: { $0.stableId == thread.stableId }) {
                 let countChanged = updated.history.count != thread.history.count
+                let previousThreadId = thread.threadId
+                let previousHistoryWasEmpty = thread.history.isEmpty
                 if isAutoscrollPaused && updated.history.count > previousHistoryCount {
                     newMessageCount += updated.history.count - previousHistoryCount
                     previousHistoryCount = updated.history.count
@@ -207,6 +209,12 @@ struct RemoteChatView: View {
                 thread = updated
                 if countChanged && !isAutoscrollPaused {
                     shouldScrollToBottom = true
+                }
+
+                if (previousThreadId != updated.threadId || previousHistoryWasEmpty) && (!updated.isLoaded || updated.history.isEmpty) {
+                    Task {
+                        await openThreadIfNeeded()
+                    }
                 }
             }
         }
@@ -295,6 +303,18 @@ struct RemoteChatView: View {
                 .font(.system(size: 24))
                 .foregroundColor(.white.opacity(0.2))
             Text("No thread history yet")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.4))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white.opacity(0.4)))
+                .scaleEffect(0.8)
+            Text("Opening remote session...")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.white.opacity(0.4))
         }
@@ -843,13 +863,48 @@ struct RemoteChatView: View {
     }
 
     private func submitPlainText(_ text: String) {
-        inputText = ""
         slashFeedbackMessage = nil
         resumeAutoscroll()
         shouldScrollToBottom = true
 
         Task {
-            try? await remoteSessionMonitor.sendMessage(thread: thread, text: text)
+            do {
+                try await remoteSessionMonitor.sendMessage(thread: thread, text: text)
+                await MainActor.run {
+                    inputText = ""
+                }
+            } catch {
+                await MainActor.run {
+                    slashFeedbackMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func openThreadIfNeeded() async {
+        guard shouldLoadThreadDetails else { return }
+
+        await MainActor.run {
+            isOpeningThread = true
+        }
+        defer {
+            Task { @MainActor in
+                isOpeningThread = false
+            }
+        }
+
+        do {
+            let updated = try await remoteSessionMonitor.openThread(
+                hostId: thread.hostId,
+                threadId: thread.threadId
+            )
+            await MainActor.run {
+                thread = updated
+            }
+        } catch {
+            await MainActor.run {
+                slashFeedbackMessage = error.localizedDescription
+            }
         }
     }
 

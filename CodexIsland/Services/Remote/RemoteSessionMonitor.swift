@@ -300,7 +300,13 @@ final class RemoteSessionMonitor: ObservableObject {
 
             do {
                 let thread = try await self.startThread(hostId: hostId)
-                await onSuccess(thread)
+                let openedThread: RemoteThreadState
+                if thread.isLoaded && !thread.history.isEmpty {
+                    openedThread = thread
+                } else {
+                    openedThread = try await self.openThread(hostId: hostId, threadId: thread.threadId)
+                }
+                await onSuccess(openedThread)
             } catch {
                 await MainActor.run {
                     self.markStateChanged()

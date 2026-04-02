@@ -446,4 +446,61 @@ final class RemoteSessionMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.threads.count, 1)
     }
 
+    func testCreateThreadOpensExistingLogicalSessionBeforeCallback() async throws {
+        let logger = TestDiagnosticsLogger()
+        let connection = FakeRemoteConnection()
+        let host = RemoteHostConfig(id: "host-1", name: "Remote", sshTarget: "ssh-target", defaultCwd: "/repo", isEnabled: true)
+        let existingThread = makeThread(id: "thread-existing", preview: "Existing", cwd: "/repo")
+        let resumedThread = RemoteAppServerThread(
+            id: "thread-existing",
+            preview: "Existing",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 1_700_000_000,
+            updatedAt: 1_700_000_100,
+            status: .idle,
+            path: nil,
+            cwd: "/repo",
+            cliVersion: "1.0.0",
+            name: nil,
+            turns: [
+                RemoteAppServerTurn(
+                    id: "turn-1",
+                    items: [.userMessage(id: "user-1", content: [.text("hello")])],
+                    status: .completed,
+                    error: nil
+                )
+            ]
+        )
+
+        connection.resumeThreadHandler = { _, _ in
+            makeThreadResumeResponse(thread: resumedThread)
+        }
+
+        let monitor = RemoteSessionMonitor(
+            initialHosts: [host],
+            loadHosts: { [host] in [host] },
+            saveHosts: { _ in },
+            diagnosticsLogger: logger,
+            connectionFactory: { _, emit in
+                connection.emit = emit
+                return connection
+            }
+        )
+        TestObjectRetainer.retain(monitor)
+
+        monitor.startMonitoring()
+        monitor.apply(event: .threadUpsert(hostId: host.id, thread: existingThread))
+
+        let callbackThread = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RemoteThreadState, Error>) in
+            monitor.createThread(hostId: host.id) { thread in
+                continuation.resume(returning: thread)
+            }
+        }
+
+        XCTAssertEqual(callbackThread.threadId, "thread-existing")
+        XCTAssertEqual(callbackThread.history.count, 1)
+        XCTAssertEqual(callbackThread.history.first?.type, .user("hello"))
+    }
+
 }
