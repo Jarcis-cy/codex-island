@@ -388,6 +388,7 @@ struct NotchView: View {
                         sessionMonitor: sessionMonitor,
                         viewModel: viewModel
                     )
+                    .id("local-chat-\(logicalSessionId)-\(session.sessionId)")
                 } else {
                     CodexInstancesView(
                         sessionMonitor: sessionMonitor,

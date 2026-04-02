@@ -50,6 +50,8 @@ class ChatHistoryManager: ObservableObject {
         defer { loadingSessions.remove(source) }
 
         await SessionStore.shared.process(.loadHistory(sessionId: sessionId, cwd: cwd))
+        guard let session = await SessionStore.shared.session(for: sessionId) else { return }
+        guard session.transcriptPath != nil || !session.chatItems.isEmpty else { return }
         loadedSessions[logicalSessionId] = sessionId
     }
 

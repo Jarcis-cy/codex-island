@@ -146,6 +146,7 @@ struct ChatView: View {
         .onReceive(sessionMonitor.$instances) { sessions in
             if let updated = sessions.first(where: { $0.logicalSessionId == logicalSessionId }),
                updated != session {
+                let previousSession = session
                 let hadPendingInteraction = hasPendingInteraction
                 session = updated
                 let isNowProcessing = updated.phase == .processing
@@ -153,6 +154,20 @@ struct ChatView: View {
                 if hadPendingInteraction && updated.primaryPendingInteraction == nil && isNowProcessing {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         shouldScrollToBottom = true
+                    }
+                }
+
+                let needsReload = !ChatHistoryManager.shared.isLoaded(
+                    logicalSessionId: logicalSessionId,
+                    sessionId: updated.sessionId
+                ) && (
+                    previousSession.sessionId != updated.sessionId ||
+                    previousSession.transcriptPath != updated.transcriptPath
+                )
+
+                if needsReload {
+                    Task {
+                        await ensureHistoryLoaded(for: updated)
                     }
                 }
             } else if !sessions.contains(where: { $0.logicalSessionId == logicalSessionId }) {

@@ -15,7 +15,7 @@ final class ChatHistoryManagerTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testEmptySessionIsNotMarkedLoadedBeforeExplicitHistoryLoad() async {
+    func testSessionWithoutTranscriptIsNotMarkedLoadedAfterExplicitHistoryLoad() async {
         await SessionStore.shared.process(.hookReceived(makeHookEvent(sessionId: "session-1", tty: "/dev/ttys001")))
         await Task.yield()
 
@@ -36,6 +36,35 @@ final class ChatHistoryManagerTests: XCTestCase {
             cwd: session.cwd
         )
 
+        XCTAssertFalse(
+            ChatHistoryManager.shared.isLoaded(
+                logicalSessionId: session.logicalSessionId,
+                sessionId: session.sessionId
+            )
+        )
+    }
+
+    func testSessionWithTranscriptCanBeMarkedLoadedEvenWhenConversationIsEmpty() async throws {
+        let transcriptPath = try makeTempTranscriptFile()
+        await SessionStore.shared.process(.hookReceived(
+            makeHookEvent(
+                sessionId: "session-1",
+                tty: "/dev/ttys001",
+                transcriptPath: transcriptPath
+            )
+        ))
+        await Task.yield()
+
+        guard let session = await SessionStore.shared.allSessions().first else {
+            return XCTFail("Expected session")
+        }
+
+        await ChatHistoryManager.shared.loadFromFile(
+            logicalSessionId: session.logicalSessionId,
+            sessionId: session.sessionId,
+            cwd: session.cwd
+        )
+
         XCTAssertTrue(
             ChatHistoryManager.shared.isLoaded(
                 logicalSessionId: session.logicalSessionId,
@@ -44,8 +73,15 @@ final class ChatHistoryManagerTests: XCTestCase {
         )
     }
 
-    func testReboundLogicalSessionRequiresReloadForLatestSessionId() async {
-        await SessionStore.shared.process(.hookReceived(makeHookEvent(sessionId: "session-1", tty: "/dev/ttys001")))
+    func testReboundLogicalSessionRequiresReloadForLatestSessionId() async throws {
+        let transcriptPath = try makeTempTranscriptFile()
+        await SessionStore.shared.process(.hookReceived(
+            makeHookEvent(
+                sessionId: "session-1",
+                tty: "/dev/ttys001",
+                transcriptPath: transcriptPath
+            )
+        ))
 
         guard let firstSession = await SessionStore.shared.allSessions().first else {
             return XCTFail("Expected first session")
@@ -86,13 +122,14 @@ final class ChatHistoryManagerTests: XCTestCase {
         tty: String?,
         pid: Int? = nil,
         cwd: String = "/tmp/project",
-        terminalName: String = "Apple_Terminal"
+        terminalName: String = "Apple_Terminal",
+        transcriptPath: String? = nil
     ) -> HookEvent {
         HookEvent(
             sessionId: sessionId,
             provider: .codex,
             cwd: cwd,
-            transcriptPath: nil,
+            transcriptPath: transcriptPath,
             event: "SessionStart",
             status: "waiting_for_input",
             pid: pid,
@@ -108,5 +145,13 @@ final class ChatHistoryManagerTests: XCTestCase {
             notificationType: nil,
             message: nil
         )
+    }
+
+    private func makeTempTranscriptFile() throws -> String {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("jsonl")
+        try Data().write(to: path)
+        return path.path
     }
 }
