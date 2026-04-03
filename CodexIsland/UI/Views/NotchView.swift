@@ -405,6 +405,7 @@ struct NotchView: View {
                     remoteSessionMonitor: remoteSessionMonitor,
                     viewModel: viewModel
                 )
+                .id("remote-chat-\(thread.stableId)-\(thread.threadId)")
             }
         }
         .frame(width: notchSize.width - 24) // Fixed width to prevent text reflow

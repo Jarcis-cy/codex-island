@@ -161,6 +161,10 @@ nonisolated struct RemoteThreadState: Identifiable, Equatable, Sendable {
         primaryPendingInteraction == nil && (canStartTurn || canSteerTurn)
     }
 
+    var needsHydration: Bool {
+        !isLoaded
+    }
+
     var canInterrupt: Bool {
         phase == .processing || phase == .compacting
     }

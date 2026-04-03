@@ -75,6 +75,36 @@ final class RemoteAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(action, .command(.new, args: nil))
     }
 
+    func testLoadedEmptyRemoteThreadDoesNotNeedHydration() {
+        let thread = RemoteThreadState(
+            hostId: "host-1",
+            hostName: "Remote",
+            threadId: "thread-new",
+            logicalSessionId: "remote|ssh-target|/repo",
+            preview: "Preview",
+            name: nil,
+            cwd: "/repo",
+            phase: .idle,
+            lastActivity: Date(),
+            createdAt: Date(),
+            updatedAt: Date(),
+            lastMessage: nil,
+            lastMessageRole: nil,
+            lastToolName: nil,
+            lastUserMessageDate: nil,
+            history: [],
+            activeTurnId: nil,
+            isLoaded: true,
+            canSteerTurn: false,
+            pendingApproval: nil,
+            pendingInteractions: [],
+            connectionState: .connected,
+            turnContext: .empty
+        )
+
+        XCTAssertFalse(thread.needsHydration)
+    }
+
     func testChoiceQuestionWithOtherStillSupportsInlineResponse() {
         let question = PendingInteractionQuestion(
             id: "mode",

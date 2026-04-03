@@ -40,6 +40,17 @@ final class NotchViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.isHovering)
     }
 
+    func testRemoteChatContentIdIncludesThreadId() {
+        let oldThread = makeRemoteThreadState(threadId: "thread-old")
+        let newThread = makeRemoteThreadState(threadId: "thread-new")
+
+        XCTAssertNotEqual(NotchContentType.remoteChat(oldThread), NotchContentType.remoteChat(newThread))
+        XCTAssertEqual(
+            NotchContentType.remoteChat(newThread).id,
+            "remote-chat-\(newThread.stableId)-\(newThread.threadId)"
+        )
+    }
+
     private func makeViewModel(hoverCloseDelay: TimeInterval = 2.0) -> NotchViewModel {
         NotchViewModel(
             deviceNotchRect: CGRect(x: 0, y: 0, width: 200, height: 32),
@@ -48,6 +59,34 @@ final class NotchViewModelTests: XCTestCase {
             hasPhysicalNotch: true,
             hoverCloseDelay: hoverCloseDelay,
             monitorEvents: false
+        )
+    }
+
+    private func makeRemoteThreadState(threadId: String) -> RemoteThreadState {
+        RemoteThreadState(
+            hostId: "host-1",
+            hostName: "Remote",
+            threadId: threadId,
+            logicalSessionId: "remote|ssh-target|/repo",
+            preview: "Preview",
+            name: nil,
+            cwd: "/repo",
+            phase: .idle,
+            lastActivity: Date(),
+            createdAt: Date(),
+            updatedAt: Date(),
+            lastMessage: nil,
+            lastMessageRole: nil,
+            lastToolName: nil,
+            lastUserMessageDate: nil,
+            history: [],
+            activeTurnId: nil,
+            isLoaded: true,
+            canSteerTurn: false,
+            pendingApproval: nil,
+            pendingInteractions: [],
+            connectionState: .connected,
+            turnContext: .empty
         )
     }
 }

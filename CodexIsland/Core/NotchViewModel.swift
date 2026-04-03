@@ -36,7 +36,7 @@ enum NotchContentType: Equatable {
         case .menu: return "menu"
         case .chat(let logicalSessionId): return "chat-\(logicalSessionId)"
         case .remoteHosts: return "remote-hosts"
-        case .remoteChat(let thread): return "remote-chat-\(thread.stableId)"
+        case .remoteChat(let thread): return "remote-chat-\(thread.stableId)-\(thread.threadId)"
         }
     }
 }

@@ -172,7 +172,7 @@ struct RemoteChatView: View {
     }
 
     private var shouldLoadThreadDetails: Bool {
-        !thread.isLoaded || thread.history.isEmpty
+        thread.needsHydration
     }
 
     var body: some View {
@@ -223,7 +223,7 @@ struct RemoteChatView: View {
                     shouldScrollToBottom = true
                 }
 
-                if (previousThreadId != updated.threadId || previousHistoryWasEmpty) && (!updated.isLoaded || updated.history.isEmpty) {
+                if (previousThreadId != updated.threadId || previousHistoryWasEmpty) && updated.needsHydration {
                     Task {
                         await openThreadIfNeeded()
                     }
