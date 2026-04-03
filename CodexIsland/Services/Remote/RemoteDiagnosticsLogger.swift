@@ -85,12 +85,14 @@ actor RemoteDiagnosticsLogger: RemoteDiagnosticsLogging {
     private let fileURL: URL
     private let maxFileSizeBytes: Int
     private let maxRotatedFiles: Int
+    private let isEnabled: @Sendable () -> Bool
 
     init(
         fileManager: FileManager = .default,
         directoryURL: URL? = nil,
         maxFileSizeBytes: Int = 10 * 1024 * 1024,
-        maxRotatedFiles: Int = 5
+        maxRotatedFiles: Int = 5,
+        isEnabled: @escaping @Sendable () -> Bool = { AppSettings.remoteDiagnosticsLoggingEnabled }
     ) {
         self.fileManager = fileManager
         self.encoder = JSONEncoder()
@@ -100,9 +102,11 @@ actor RemoteDiagnosticsLogger: RemoteDiagnosticsLogging {
         self.fileURL = resolvedDirectory.appendingPathComponent("remote-app-server.jsonl")
         self.maxFileSizeBytes = maxFileSizeBytes
         self.maxRotatedFiles = max(1, maxRotatedFiles)
+        self.isEnabled = isEnabled
     }
 
     func log(_ record: RemoteDiagnosticsRecord) async {
+        guard isEnabled() else { return }
         do {
             try ensureDirectoryExists()
             let data = try encoder.encode(record)

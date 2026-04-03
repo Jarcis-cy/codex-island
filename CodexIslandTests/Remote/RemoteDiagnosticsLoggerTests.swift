@@ -5,7 +5,12 @@ final class RemoteDiagnosticsLoggerTests: XCTestCase {
     func testLoggerWritesJSONLines() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let logger = RemoteDiagnosticsLogger(directoryURL: directory, maxFileSizeBytes: 1024, maxRotatedFiles: 3)
+        let logger = RemoteDiagnosticsLogger(
+            directoryURL: directory,
+            maxFileSizeBytes: 1024,
+            maxRotatedFiles: 3,
+            isEnabled: { true }
+        )
 
         await logger.log(
             RemoteDiagnosticsRecord(
@@ -25,7 +30,12 @@ final class RemoteDiagnosticsLoggerTests: XCTestCase {
     func testLoggerRotatesFilesWhenThresholdExceeded() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let logger = RemoteDiagnosticsLogger(directoryURL: directory, maxFileSizeBytes: 180, maxRotatedFiles: 3)
+        let logger = RemoteDiagnosticsLogger(
+            directoryURL: directory,
+            maxFileSizeBytes: 180,
+            maxRotatedFiles: 3,
+            isEnabled: { true }
+        )
 
         for index in 0..<6 {
             await logger.log(
@@ -39,5 +49,27 @@ final class RemoteDiagnosticsLoggerTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("remote-app-server.jsonl").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("remote-app-server.1.jsonl").path))
+    }
+
+    func testLoggerSkipsWritesWhenDisabled() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let logger = RemoteDiagnosticsLogger(
+            directoryURL: directory,
+            maxFileSizeBytes: 1024,
+            maxRotatedFiles: 3,
+            isEnabled: { false }
+        )
+
+        await logger.log(
+            RemoteDiagnosticsRecord(
+                level: .info,
+                category: "remote.test",
+                message: "disabled"
+            )
+        )
+
+        let fileURL = directory.appendingPathComponent("remote-app-server.jsonl")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 }

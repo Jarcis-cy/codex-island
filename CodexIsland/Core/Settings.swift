@@ -39,6 +39,7 @@ enum AppSettings {
     private enum Keys {
         static let notificationSound = "notificationSound"
         static let remoteHosts = "remoteHosts"
+        static let remoteDiagnosticsLoggingEnabled = "remoteDiagnosticsLoggingEnabled"
     }
 
     // MARK: - Notification Sound
@@ -78,6 +79,17 @@ enum AppSettings {
             } catch {
                 defaults.removeObject(forKey: Keys.remoteHosts)
             }
+        }
+    }
+
+    // MARK: - Remote Diagnostics Logging
+
+    static var remoteDiagnosticsLoggingEnabled: Bool {
+        get {
+            defaults.bool(forKey: Keys.remoteDiagnosticsLoggingEnabled)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.remoteDiagnosticsLoggingEnabled)
         }
     }
 }

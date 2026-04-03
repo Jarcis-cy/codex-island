@@ -20,6 +20,7 @@ struct NotchMenuView: View {
     @ObservedObject private var soundSelector = SoundSelector.shared
     @State private var hooksInstalled: Bool = false
     @State private var launchAtLogin: Bool = false
+    @State private var remoteDebugLogsEnabled: Bool = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -75,6 +76,15 @@ struct NotchMenuView: View {
                         HookInstaller.installIfNeeded()
                         hooksInstalled = true
                     }
+                }
+
+                MenuToggleRow(
+                    icon: "ladybug",
+                    label: "Remote Debug Logs",
+                    isOn: remoteDebugLogsEnabled
+                ) {
+                    remoteDebugLogsEnabled.toggle()
+                    AppSettings.remoteDiagnosticsLoggingEnabled = remoteDebugLogsEnabled
                 }
 
                 AccessibilityRow(isEnabled: AXIsProcessTrusted())
@@ -137,6 +147,7 @@ struct NotchMenuView: View {
     private func refreshStates() {
         hooksInstalled = HookInstaller.isInstalled()
         launchAtLogin = SMAppService.mainApp.status == .enabled
+        remoteDebugLogsEnabled = AppSettings.remoteDiagnosticsLoggingEnabled
         screenSelector.refreshScreens()
     }
 }
