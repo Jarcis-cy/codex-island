@@ -13,12 +13,20 @@
 
 Codex Island 用来盯住本地运行中的 Codex 会话，也可以通过 SSH 连接远端机器上的 Codex，并把状态变化放到 macOS 的 Dynamic Island 风格浮层里。它适合长期把 Codex 跑在终端里的用户，让你不用一直盯着每个 shell 窗口，也能及时看到状态、审批请求和最近上下文。
 
+## 0.0.2 更新
+
+- 在本地和远端聊天头部直接显示模型信息与剩余上下文百分比。
+- 强化远端 `/new` 与 `/resume` 的线程切换流程，尤其是同一 SSH target 和工作目录下有多个线程时更稳定。
+- 远端诊断日志改为默认关闭，需要时可从菜单开启 `Remote Debug Logs` 并写入 `remote-app-server.jsonl`。
+- 修复本地首次 `Open Session` 空白聊天窗口，以及多处远端会话打开 / rebinding 异常。
+
 ## 功能概览
 
 - 通过 `~/.codex/hooks.json` 和本地 Unix Socket 监听 Codex 会话。
 - 通过 SSH 连接远端机器，并通过 stdio 和 `codex app-server` 通信。
 - 从刘海区域展开，展示会话状态、等待输入、工具执行等信息。
 - 内置最近对话历史查看，并支持 Markdown 渲染。
+- 在聊天头部显示当前模型信息和剩余上下文。
 - 可直接在应用界面里处理审批流。
 - 支持同时跟踪多个本地会话和远端 threads，并在它们之间切换。
 - 可在应用内保存 SSH Target、可选默认工作目录和远端主机自动连接设置。
@@ -62,9 +70,9 @@ xcodebuild -scheme CodexIsland -configuration Debug build
 ssh -T -o BatchMode=yes <target> codex app-server --listen stdio://
 ```
 
-这意味着当前远端能力依赖非交互式 SSH 认证，且远端机器必须已经能在 `PATH` 上找到 `codex`。连接后，应用可以直接列出远端线程、新建线程、打开已有线程、发送消息、中断 turn，并在 UI 里处理审批。
+这意味着当前远端能力依赖非交互式 SSH 认证，且远端机器必须已经能在 `PATH` 上找到 `codex`。连接后，应用可以直接列出远端线程、新建线程、打开已有线程、发送消息、中断 turn，并在 UI 里处理审批。远端聊天视图支持 `/new` 显式新开 thread，也支持用 `/resume` 切回旧 thread。
 
-远端 app-server 的诊断日志会写入 `~/Library/Application Support/Codex Island/Logs/remote-app-server.jsonl`。
+远端 app-server 的诊断日志默认关闭。只有在菜单里启用 `Remote Debug Logs` 后，应用才会把 JSONL 诊断信息写入 `~/Library/Application Support/Codex Island/Logs/remote-app-server.jsonl`。
 
 ## 工作原理
 

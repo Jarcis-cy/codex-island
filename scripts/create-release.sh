@@ -37,6 +37,9 @@ BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/
 echo "Version: $VERSION (build $BUILD)"
 echo ""
 
+DEFAULT_RELEASE_NOTES="$PROJECT_DIR/docs/release-notes/v$VERSION.md"
+RELEASE_NOTES_FILE="${RELEASE_NOTES_FILE:-$DEFAULT_RELEASE_NOTES}"
+
 mkdir -p "$RELEASE_DIR"
 
 # ============================================
@@ -211,20 +214,41 @@ else
     if gh release view "v$VERSION" --repo "$GITHUB_REPO" &>/dev/null; then
         echo "Release v$VERSION already exists. Updating..."
         gh release upload "v$VERSION" "$DMG_PATH" --repo "$GITHUB_REPO" --clobber
+        if [ -f "$RELEASE_NOTES_FILE" ]; then
+            echo "Updating release notes from $RELEASE_NOTES_FILE"
+            gh release edit "v$VERSION" \
+                --repo "$GITHUB_REPO" \
+                --title "Codex Island v$VERSION" \
+                --notes-file "$RELEASE_NOTES_FILE"
+        fi
     else
         echo "Creating release v$VERSION..."
-        gh release create "v$VERSION" "$DMG_PATH" \
-            --repo "$GITHUB_REPO" \
-            --title "Codex Island v$VERSION" \
-            --notes "## Codex Island v$VERSION
+        if [ -f "$RELEASE_NOTES_FILE" ]; then
+            echo "Using release notes from $RELEASE_NOTES_FILE"
+            gh release create "v$VERSION" "$DMG_PATH" \
+                --repo "$GITHUB_REPO" \
+                --title "Codex Island v$VERSION" \
+                --notes-file "$RELEASE_NOTES_FILE"
+        else
+            gh release create "v$VERSION" "$DMG_PATH" \
+                --repo "$GITHUB_REPO" \
+                --title "Codex Island v$VERSION" \
+                --notes "## Codex Island v$VERSION
 
-### Installation
+### Installation / 安装
 1. Download \`$APP_NAME-$VERSION.dmg\`
 2. Open the DMG and drag Codex Island to Applications
 3. Launch Codex Island from Applications
 
-### Auto-updates
-After installation, Codex Island will automatically check for updates."
+1. 下载 \`$APP_NAME-$VERSION.dmg\`
+2. 打开 DMG，把 Codex Island 拖到 Applications
+3. 从 Applications 启动 Codex Island
+
+### Auto-updates / 自动更新
+After installation, Codex Island will automatically check for updates.
+
+安装完成后，Codex Island 会自动检查更新。"
+        fi
     fi
 
     GITHUB_DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/v$VERSION/$APP_NAME-$VERSION.dmg"

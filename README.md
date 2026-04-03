@@ -13,12 +13,20 @@
 
 Codex Island keeps an eye on your local Codex sessions, and it can also connect to Codex running on remote machines over SSH. It surfaces state changes in a Dynamic Island-style overlay on macOS for people who keep Codex in the terminal and want lightweight visibility, fast approval handling, and quick access to recent conversation context without living in every shell window.
 
+## What's New in 0.0.2
+
+- Shows model details and remaining context directly in local and remote chat headers.
+- Makes remote `/new` and `/resume` thread flows more reliable, especially when multiple threads share the same SSH target and working directory.
+- Keeps remote diagnostics off by default; you can enable `Remote Debug Logs` from the menu when you need `remote-app-server.jsonl`.
+- Fixes the initial local `Open Session` blank-chat problem and several remote session opening / rebinding issues.
+
 ## What It Does
 
 - Watches Codex sessions through `~/.codex/hooks.json` and a local Unix socket.
 - Connects to remote machines over SSH and talks to `codex app-server` over stdio.
 - Expands from the notch area to show session activity, waiting states, and tool execution status.
 - Shows recent conversation history with markdown rendering.
+- Shows active model details and remaining context in chat headers.
 - Supports approval flows directly from the app UI.
 - Tracks multiple local sessions and remote threads, and lets you switch between them.
 - Lets you save SSH targets, optional default working directories, and auto-connect remote hosts from the app.
@@ -62,9 +70,9 @@ When you connect a host, Codex Island launches:
 ssh -T -o BatchMode=yes <target> codex app-server --listen stdio://
 ```
 
-That means remote hosts currently expect non-interactive SSH authentication, and the remote machine must already have `codex` available on `PATH`. Once connected, you can list remote threads, start a new thread, open an existing thread, send messages, interrupt turns, and handle approvals from the app UI.
+That means remote hosts currently expect non-interactive SSH authentication, and the remote machine must already have `codex` available on `PATH`. Once connected, you can list remote threads, start a new thread, reopen an existing thread, send messages, interrupt turns, and handle approvals from the app UI. The remote chat view supports both `/new` for explicitly starting a fresh thread and `/resume` for switching back to an older thread.
 
-Remote app-server diagnostics are written to `~/Library/Application Support/Codex Island/Logs/remote-app-server.jsonl`.
+Remote app-server diagnostics are disabled by default. After you enable `Remote Debug Logs` from the menu, the app writes JSONL diagnostics to `~/Library/Application Support/Codex Island/Logs/remote-app-server.jsonl`.
 
 ## How It Works
 
